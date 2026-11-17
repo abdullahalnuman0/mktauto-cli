@@ -265,3 +265,30 @@ func (c *Client) RetryDestination(ctx context.Context, destinationID string) err
 	_, err := c.do(ctx, http.MethodPost, "/api/destinations/"+url.PathEscape(destinationID)+"/retry", nil, nil)
 	return err
 }
+
+// Unschedule takes a scheduled post back to a draft (also withdraws it from approval).
+func (c *Client) Unschedule(ctx context.Context, postID string) (*Post, error) {
+	var out Post
+	_, err := c.do(ctx, http.MethodPost, "/api/posts/"+url.PathEscape(postID)+"/unschedule", nil, &out)
+	return &out, err
+}
+
+// Cancel stops what hasn't been published yet; published accounts stay published.
+func (c *Client) Cancel(ctx context.Context, postID string) (*Post, error) {
+	var out Post
+	_, err := c.do(ctx, http.MethodPost, "/api/posts/"+url.PathEscape(postID)+"/cancel", nil, &out)
+	return &out, err
+}
+
+// DeletePost deletes a draft that was never scheduled.
+func (c *Client) DeletePost(ctx context.Context, postID string) error {
+	_, err := c.do(ctx, http.MethodDelete, "/api/posts/"+url.PathEscape(postID), nil, nil)
+	return err
+}
+
+// UpdatePost changes the given fields of a draft or a scheduled post that hasn't started publishing.
+func (c *Client) UpdatePost(ctx context.Context, postID string, fields map[string]any) (*Post, error) {
+	var out Post
+	_, err := c.do(ctx, http.MethodPatch, "/api/posts/"+url.PathEscape(postID), fields, &out)
+	return &out, err
+}

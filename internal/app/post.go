@@ -43,13 +43,38 @@ type postFlags struct {
 	coverFrame                                      float64
 	when, duplicates                                string
 	dryRun, jsonOut, yes, wait                      bool
+	name, pinLink, tiktokBrand, tiktokDraftFor      string
+	// ACCOUNT=value, repeatable: that account's own value (ADR-076)
+	captionFor, captionFileFor, titleFor, youtubePrivacyFor, boardFor, pinLinkFor multiFlag
+	tiktokPrivacyFor, tiktokAllowFor, tiktokBrandFor                              multiFlag
+}
+
+// perAccountFlags: the flags that take ACCOUNT=value, by name.
+func (f *postFlags) perAccountFlags() map[string]*multiFlag {
+	return map[string]*multiFlag{"caption-for": &f.captionFor, "caption-file-for": &f.captionFileFor, "title-for": &f.titleFor,
+		"youtube-privacy-for": &f.youtubePrivacyFor, "board-for": &f.boardFor, "pin-link-for": &f.pinLinkFor,
+		"tiktok-privacy-for": &f.tiktokPrivacyFor, "tiktok-allow-for": &f.tiktokAllowFor, "tiktok-brand-for": &f.tiktokBrandFor}
 }
 
 // post: the wizard when run in a terminal without flags, otherwise everything from flags (scripts, CI).
 func (e *Env) post(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("post", flag.ContinueOnError)
-	fs.SetOutput(e.Err)
 	var f postFlags
+	fs := newPostFlags(&f)
+	fs.SetOutput(e.Err)
+	fs.Usage = func() { fmt.Fprint(e.Err, postHelp) }
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	flagMode := !e.Interactive || f.project != "" || f.accounts != "" || f.files != ""
+	if f.jsonOut {
+		e.Out = e.Err
+	}
+	p := &poster{env: e, f: f, wizard: !flagMode, ask: newAsker()}
+	return p.run(ctx)
+}
+
+func newPostFlags(f *postFlags) *flag.FlagSet {
+	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	fs.StringVar(&f.project, "project", "", "project id or name")
 	fs.StringVar(&f.accounts, "accounts", "", "comma-separated: account names, @handles, ids or platforms (instagram, tiktok…)")
 	fs.StringVar(&f.files, "files", "", "comma-separated file names in posting order (\"all\" = every file); empty = text only")
@@ -75,15 +100,18 @@ func (e *Env) post(ctx context.Context, args []string) error {
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
 	fs.BoolVar(&f.yes, "yes", false, "don't ask for confirmation")
 	fs.BoolVar(&f.wait, "wait", false, "after publishing now, wait for the result")
-	if err := fs.Parse(args); err != nil {
-		return err
+	fs.StringVar(&f.name, "name", "", "the post's internal name (only you see it; default: --title)")
+	fs.StringVar(&f.pinLink, "pin-link", "", "the Pin's link on Pinterest (default: --link)")
+	fs.StringVar(&f.tiktokBrand, "tiktok-brand", "", "TikTok commercial content: yours (your brand), partner (branded content) or both: yours,partner")
+	fs.StringVar(&f.tiktokDraftFor, "tiktok-draft-for", "", "comma-separated TikTok accounts that get it as an inbox draft")
+	perAccountHelp := map[string]string{"caption-for": "its own caption", "caption-file-for": "its own caption from a file",
+		"title-for": "its own title (YouTube, Pinterest, TikTok photos)", "youtube-privacy-for": "its own YouTube visibility",
+		"board-for": "its own Pinterest board", "pin-link-for": "its own Pin link", "tiktok-privacy-for": "its own TikTok privacy",
+		"tiktok-allow-for": "its own TikTok interactions", "tiktok-brand-for": "its own TikTok commercial content"}
+	for name, v := range f.perAccountFlags() {
+		fs.Var(v, name, "ACCOUNT=value: "+perAccountHelp[name]+" (repeatable)")
 	}
-	flagMode := !e.Interactive || f.project != "" || f.accounts != "" || f.files != ""
-	if f.jsonOut {
-		e.Out = e.Err
-	}
-	p := &poster{env: e, f: f, wizard: !flagMode, ask: newAsker()}
-	return p.run(ctx)
+	return fs
 }
 
 // Content types the wizard offers first; the files and the accounts that can post them follow from it.
@@ -132,7 +160,8 @@ type poster struct {
 	whenChoice  string
 	whenAt      string
 	tiktok      map[string]*api.TikTokCreatorInfo
-	aiOffIDs    []string // accounts the AI label was turned off for
+	aiOffIDs    []string                     // accounts the AI label was turned off for
+	forv        map[string]map[string]string // per-account flags: flag → accountId → value
 }
 
 func (p *poster) run(ctx context.Context) error {
@@ -162,6 +191,7 @@ func (p *poster) run(ctx context.Context) error {
 		{"content", p.chooseKind},
 		{"files", p.chooseFiles},
 		{"accounts", p.chooseAccounts},
+		{"", p.parseForFlags},
 		{"", func() error { return p.checkDuplicates(ctx) }},
 		{"cover", p.chooseCover},
 		{"", func() error { return p.uploadFiles(ctx) }},
@@ -1225,7 +1255,7 @@ func (p *poster) initTexts() error {
 	plan.Link = firstNonEmpty(p.f.link, p.defaults.Link)
 	plan.FirstComment = firstNonEmpty(p.f.firstComm, p.defaults.FirstComment)
 	plan.MadeWithAI = p.f.ai || (p.defaults.MadeWithAI != nil && *p.defaults.MadeWithAI)
-	plan.InternalTitle = p.f.title
+	plan.InternalTitle = firstNonEmpty(p.f.name, p.f.title)
 	return nil
 }
 
@@ -1267,6 +1297,30 @@ func (p *poster) details() error {
 func (p *poster) captionsPerAccount() error {
 	plan := p.plan
 	if !p.wizard {
+		clear(plan.Captions)
+		for _, a := range plan.Accounts {
+			if v, ok := p.forValue("caption-file-for", a); ok {
+				data, err := os.ReadFile(v)
+				if err != nil {
+					return err
+				}
+				plan.Captions[a.AccountID] = strings.TrimSpace(string(data))
+			}
+			if v, ok := p.forValue("caption-for", a); ok {
+				plan.Captions[a.AccountID] = v
+			}
+		}
+		over := p.tooLong(func(a api.ProjectAccount) string {
+			if c, ok := plan.Captions[a.AccountID]; ok {
+				return c
+			}
+			return plan.Caption
+		})
+		for _, a := range plan.Accounts {
+			if l, ok := over[a.AccountID]; ok {
+				p.env.printf("%s %s (give it its own with --caption-for)\n", yellow.Render("!"), l)
+			}
+		}
 		return nil
 	}
 	over := p.tooLong(func(api.ProjectAccount) string { return plan.Caption })
@@ -1479,14 +1533,19 @@ func (p *poster) platformSettings(ctx context.Context) error {
 func (p *poster) youtube(a api.ProjectAccount) error {
 	title, ok := p.plan.Titles[a.AccountID]
 	if !ok {
-		title = firstNonEmpty(p.f.title, p.plan.InternalTitle, firstLine(p.plan.Caption))
+		own, _ := p.forValue("title-for", a)
+		title = firstNonEmpty(own, p.f.title, p.plan.InternalTitle, firstLine(p.plan.Caption))
 	}
 	if len([]rune(title)) > 100 {
 		title = string([]rune(title)[:100])
 	}
 	privacy, ok := p.plan.YouTubePrivacy[a.AccountID]
 	if !ok {
-		privacy = p.f.youtubePrivacy
+		own, _ := p.forValue("youtube-privacy-for", a)
+		privacy = strings.ToLower(firstNonEmpty(own, p.f.youtubePrivacy))
+		if !slices.Contains([]string{"", "public", "unlisted", "private"}, privacy) {
+			return fmt.Errorf("YouTube visibility %q: use public, unlisted or private", privacy)
+		}
 	}
 	if privacy == "public" {
 		privacy = ""
@@ -1512,13 +1571,19 @@ func (p *poster) youtube(a api.ProjectAccount) error {
 func (p *poster) pinterest(ctx context.Context, a api.ProjectAccount) error {
 	board, ok := p.plan.Boards[a.AccountID]
 	if !ok {
-		board = p.f.board
+		own, _ := p.forValue("board-for", a)
+		board = firstNonEmpty(own, p.f.board)
 	}
 	title, ok := p.plan.Titles[a.AccountID]
 	if !ok {
-		title = firstNonEmpty(p.f.title, p.plan.InternalTitle)
+		own, _ := p.forValue("title-for", a)
+		title = firstNonEmpty(own, p.f.title, p.plan.InternalTitle)
 	}
-	pinLink := p.plan.PinLinks[a.AccountID]
+	pinLink, ok := p.plan.PinLinks[a.AccountID]
+	if !ok {
+		own, _ := p.forValue("pin-link-for", a)
+		pinLink = firstNonEmpty(own, p.f.pinLink)
+	}
 	if p.wizard {
 		accounts, err := p.c.Accounts(ctx)
 		if err != nil {
@@ -1567,8 +1632,16 @@ func (p *poster) tiktokSettings(ctx context.Context, a api.ProjectAccount) error
 	}
 	c, ok := p.plan.TikTok[a.AccountID]
 	if !ok {
-		c = compose.TikTokChoice{Privacy: p.f.tiktokPrivacy, Draft: p.f.tiktokDraft}
-		for _, x := range splitList(p.f.tiktokAllow) {
+		privacy, _ := p.forValue("tiktok-privacy-for", a)
+		c = compose.TikTokChoice{Privacy: strings.ToUpper(firstNonEmpty(privacy, p.f.tiktokPrivacy)), Draft: p.f.tiktokDraft}
+		if len(mustMatch(splitList(p.f.tiktokDraftFor), []api.ProjectAccount{a})) > 0 {
+			c.Draft = true
+		}
+		allow, ok := p.forValue("tiktok-allow-for", a)
+		if !ok {
+			allow = p.f.tiktokAllow
+		}
+		for _, x := range splitList(allow) {
 			switch strings.ToLower(x) {
 			case "comments", "comment":
 				c.AllowComments = true
@@ -1576,7 +1649,28 @@ func (p *poster) tiktokSettings(ctx context.Context, a api.ProjectAccount) error
 				c.AllowDuet = true
 			case "stitch":
 				c.AllowStitch = true
+			case "none", "-":
+			default:
+				return fmt.Errorf("TikTok allow %q: use comments, duet, stitch or none", x)
 			}
+		}
+		brand, ok := p.forValue("tiktok-brand-for", a)
+		if !ok {
+			brand = p.f.tiktokBrand
+		}
+		for _, x := range splitList(brand) {
+			switch strings.ToLower(x) {
+			case "yours", "own", "organic", "your-brand":
+				c.BrandDisclose, c.BrandOrganic = true, true
+			case "partner", "branded", "paid", "branded-content":
+				c.BrandDisclose, c.BrandContent = true, true
+			case "none", "-":
+			default:
+				return fmt.Errorf("TikTok commercial content %q: use yours, partner, both (yours,partner) or none", x)
+			}
+		}
+		if t, ok := p.forValue("title-for", a); ok {
+			p.plan.Titles[a.AccountID] = t
 		}
 	}
 	format := p.plan.FormatFor(a)
@@ -2119,3 +2213,89 @@ func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	return line
 }
+
+// parseForFlags checks every ACCOUNT=value flag against the chosen accounts (scripts only).
+func (p *poster) parseForFlags() error {
+	p.forv = map[string]map[string]string{}
+	for name, specs := range p.f.perAccountFlags() {
+		for _, spec := range *specs {
+			acc, value, ok := strings.Cut(spec, "=")
+			if !ok || strings.TrimSpace(acc) == "" {
+				return fmt.Errorf("--%s %q: write ACCOUNT=value, e.g. --%s instagram=…", name, spec, name)
+			}
+			matched, err := compose.MatchAccounts([]string{strings.TrimSpace(acc)}, p.chosen)
+			if err != nil {
+				return fmt.Errorf("--%s: %w (it must be one of the accounts in --accounts)", name, err)
+			}
+			if p.forv[name] == nil {
+				p.forv[name] = map[string]string{}
+			}
+			for _, a := range matched {
+				p.forv[name][a.AccountID] = value
+			}
+		}
+	}
+	return nil
+}
+
+func (p *poster) forValue(flag string, a api.ProjectAccount) (string, bool) {
+	v, ok := p.forv[flag][a.AccountID]
+	return v, ok
+}
+
+// postHelp: mktauto post -h, grouped (TestPostHelpListsEveryFlag keeps it complete).
+const postHelp = `Usage: mktauto post [flags]
+Without flags in a terminal: step by step. With flags: everything from the command line (scripts, CI).
+ACCOUNT = an account name, @handle, id or platform (facebook, instagram, threads, x, pinterest, tiktok, youtube).
+
+What and where
+  --project NAME              project (name or id)
+  --accounts A,B              accounts to post to
+  --files a.png,b.mp4         files in posting order ("all" = every file; none = text only)
+  --only ACCOUNT=1,3          that account gets only these files (positions in --files), in this order; repeatable
+
+Texts (for every account)
+  --caption TEXT  | --caption-file FILE
+  --hashtags "android kotlin"
+  --link URL                  link preview on Facebook and Threads, the Pin's link
+  --first-comment TEXT        Facebook Pages and Instagram
+  --title TEXT                YouTube, Pinterest and TikTok photo title
+  --name TEXT                 internal name, only you see it (default: --title)
+  --ai                        "made with AI" label wherever the platform has one
+  --ai-off-for A,B            …but not on these accounts
+
+One account's own value (ACCOUNT=value, repeatable)
+  --caption-for ACCOUNT=TEXT        --caption-file-for ACCOUNT=FILE
+  --title-for ACCOUNT=TEXT          --youtube-privacy-for ACCOUNT=unlisted
+  --board-for ACCOUNT=BOARD_ID      --pin-link-for ACCOUNT=URL
+  --tiktok-privacy-for ACCOUNT=SELF_ONLY
+  --tiktok-allow-for ACCOUNT=comments,duet
+  --tiktok-brand-for ACCOUNT=yours,partner
+
+Platforms
+  --tiktok-privacy LEVEL      PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, FOLLOWER_OF_CREATOR or SELF_ONLY
+  --tiktok-allow LIST         comments,duet,stitch (off unless listed)
+  --tiktok-brand LIST         commercial content: yours (your brand), partner (branded content)
+  --tiktok-draft              send to the TikTok inbox as a draft
+  --tiktok-draft-for A,B      …only these TikTok accounts
+  --youtube-privacy P         public (default), unlisted or private
+  --board BOARD_ID            Pinterest board (mktauto boards ACCOUNT lists them)
+  --pin-link URL              the Pin's link (default: --link)
+  --cover IMAGE               an image in this folder as the video's cover
+  --cover-frame SECONDS       a second of the video as its cover (TikTok, Instagram, Pinterest)
+
+When and how
+  --when WHEN                 draft (default), now, next-slot or "YYYY-MM-DD HH:MM" (project's timezone)
+  --duplicates WHAT           files posted before: post, new-only or skip
+  --dry-run                   check everything, upload and save nothing, print the post
+  --json                      print the saved post as JSON
+  --yes                       don't ask for confirmation
+  --wait                      after publishing now, wait for each account's result
+
+Examples
+  mktauto post --project Memoshot --accounts facebook,instagram,tiktok --files a.png,b.png,c.png \
+    --only tiktok=1 --caption-file caption.txt --caption-for x="Short version for X" \
+    --tiktok-privacy SELF_ONLY --when "2026-12-01 18:30"
+  mktauto post --project Memoshot --accounts youtube,tiktok --files reel.mp4 --title "Launch" \
+    --youtube-privacy unlisted --tiktok-brand yours --tiktok-privacy PUBLIC_TO_EVERYONE --when now --wait
+`

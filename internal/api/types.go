@@ -87,10 +87,14 @@ func (a ProjectAccount) Usable() bool { return a.Status != "DISABLED" && a.Statu
 
 // Account carries per-account settings (Pinterest boards).
 type Account struct {
-	ID          string         `json:"id"`
-	Platform    string         `json:"platform"`
-	DisplayName string         `json:"displayName"`
-	Settings    map[string]any `json:"settings"`
+	ID           string         `json:"id"`
+	Platform     string         `json:"platform"`
+	DisplayName  string         `json:"displayName"`
+	Handle       string         `json:"handle"`
+	PublishMode  string         `json:"publishMode"`
+	Status       string         `json:"status"`
+	StatusReason string         `json:"statusReason"`
+	Settings     map[string]any `json:"settings"`
 }
 
 type Board struct {

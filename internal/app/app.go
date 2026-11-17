@@ -47,20 +47,35 @@ var errSilent = errors.New("")
 const usage = `mktauto: post to your MKTAuto accounts from a folder.
 
 Usage:
-  mktauto                 menu (signs in first when needed)
-  mktauto post [flags]    post files from this folder (no flags: step by step)
-  mktauto login           sign in (browser approval; --code for a login code)
-  mktauto logout          sign out this computer
-  mktauto whoami          who and what this terminal may do
-  mktauto status [post]   recent posts, or one post's accounts
-  mktauto retry <post>    publish failed accounts of a post again
-  mktauto history [--all] what was posted from this folder
-  mktauto open [post]     open the website (or a post) in the browser
-  mktauto doctor          check the connection and this installation
-  mktauto update          install the latest version (--version vX.Y.Z for another one)
+  mktauto                    menu (signs in first when needed)
+  mktauto post [flags]       post files from this folder (no flags: step by step; -h lists every flag)
+
+Find what to post to:
+  mktauto projects           projects this terminal may post to
+  mktauto accounts           accounts (--project NAME: that project's, with its default ticks)
+  mktauto boards ACCOUNT     a Pinterest account's boards
+
+Saved posts (POST = an id, its first characters as status shows them, or "last"):
+  mktauto status [POST]      recent posts, or one post's accounts
+  mktauto edit POST          change caption, hashtags, link or name (--caption, --hashtags, --link, --name)
+  mktauto schedule POST      schedule or move it (--at "YYYY-MM-DD HH:MM" or --next-slot)
+  mktauto unschedule POST    back to a draft
+  mktauto publish POST       publish now
+  mktauto cancel POST        stop what isn't published yet
+  mktauto delete POST        delete a draft
+  mktauto retry POST         publish failed accounts again
+  mktauto open [POST]        open the website (or the post) in the browser
+  mktauto history [--all]    what was posted from this folder
+
+This computer:
+  mktauto login              sign in (browser approval or QR code; --code for a login code)
+  mktauto logout             sign out this computer
+  mktauto whoami             who and what this terminal may do
+  mktauto doctor             check the connection and this installation
+  mktauto update             install the latest version (--version vX.Y.Z for another one)
   mktauto version
 
-Global: --server URL (or MKTAUTO_SERVER) to use another MKTAuto server.
+Global: --server URL (or MKTAUTO_SERVER) to use another MKTAuto server. Most commands take --json.
 Run "mktauto <command> -h" for a command's flags. More: https://mktauto.site/download
 `
 
@@ -160,6 +175,24 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.open(ctx, args)
 	case "doctor":
 		return e.doctor(ctx)
+	case "projects":
+		return e.projects(ctx, args)
+	case "accounts":
+		return e.accounts(ctx, args)
+	case "boards":
+		return e.boards(ctx, args)
+	case "schedule", "reschedule":
+		return e.schedule(ctx, args)
+	case "unschedule":
+		return e.unschedule(ctx, args)
+	case "publish":
+		return e.publish(ctx, args)
+	case "cancel":
+		return e.cancel(ctx, args)
+	case "delete":
+		return e.deletePost(ctx, args)
+	case "edit":
+		return e.edit(ctx, args)
 	case "update":
 		return e.update(ctx, args)
 	case "version", "--version", "-v":

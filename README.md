@@ -59,7 +59,27 @@ mktauto post --project Memoshot --accounts facebook,instagram,tiktok \
   --tiktok-privacy SELF_ONLY --when "2026-12-01 18:30"
 ```
 
-`mktauto post -h` lists every flag. Other commands: `status`, `retry`, `history`, `open`, `whoami`, `logout`, `doctor`.
+`mktauto post -h` lists every flag, grouped, with examples. Any account can get its own values with
+`ACCOUNT=value` flags: `--caption-for instagram="…"`, `--title-for youtube="…"`, `--tiktok-privacy-for @me=SELF_ONLY`,
+`--board-for pinterest=<id>`, `--tiktok-brand yours,partner` and more.
+
+Find names and ids for scripts: `mktauto projects`, `mktauto accounts --project Memoshot`, `mktauto boards @account`
+(all with `--json`).
+
+Manage saved posts (`POST` = its id, the first characters `mktauto status` shows, or `last`):
+
+```sh
+mktauto status                      # recent posts
+mktauto schedule last --at "2026-12-01 18:30"   # or --next-slot; also moves a scheduled post
+mktauto unschedule 3f2a91c0         # back to a draft
+mktauto edit last --caption-file new.txt --hashtags "android kotlin"
+mktauto publish last --wait
+mktauto cancel 3f2a91c0 --yes       # stop what isn't published yet
+mktauto delete 3f2a91c0 --yes       # drafts only
+```
+
+The menu's "Saved posts" does the same step by step. Other commands: `retry`, `history`, `open`, `whoami`, `logout`,
+`doctor`, `update`.
 
 ### Folder helpers
 

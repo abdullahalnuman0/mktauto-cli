@@ -73,6 +73,7 @@ func (e *Env) menu(ctx context.Context) error {
 		}
 		err := huh.NewSelect[string]().Title("Folder "+shortPath(e.Dir)).Options(
 			huh.NewOption(postLabel, "post"),
+			huh.NewOption("Saved posts: schedule, move, publish, edit, cancel, delete", "manage"),
 			huh.NewOption("Status of recent posts", "status"),
 			huh.NewOption("What was posted from this folder", "history"),
 			huh.NewOption("Who am I", "whoami"),
@@ -85,6 +86,8 @@ func (e *Env) menu(ctx context.Context) error {
 		switch choice {
 		case "post":
 			err = e.post(ctx, nil)
+		case "manage":
+			err = e.managePosts(ctx)
 		case "status":
 			err = e.status(ctx, nil)
 		case "history":
@@ -138,7 +141,11 @@ func (e *Env) status(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(args) > 0 {
-		p, err := c.Post(ctx, args[0])
+		id, err := e.resolvePost(ctx, c, args[0])
+		if err != nil {
+			return err
+		}
+		p, err := c.Post(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -213,7 +220,11 @@ func (e *Env) retry(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	p, err := c.Post(ctx, args[0])
+	id, err := e.resolvePost(ctx, c, args[0])
+	if err != nil {
+		return err
+	}
+	p, err := c.Post(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -285,7 +296,11 @@ func (e *Env) open(ctx context.Context, args []string) error {
 	}
 	url := m.WebURL + "/dashboard"
 	if len(args) > 0 {
-		url = m.WebURL + "/posts/" + args[0]
+		id, err := e.resolvePost(ctx, c, args[0])
+		if err != nil {
+			return err
+		}
+		url = m.WebURL + "/posts/" + id
 	}
 	if !auth.OpenBrowser(url) {
 		e.printf("Open: %s\n", url)

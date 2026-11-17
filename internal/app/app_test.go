@@ -35,10 +35,27 @@ type fakeServer struct {
 	published  []string
 	assets     map[string]string // assetId → mime
 	usedHashes map[string]string // sha256 → assetId (posted before)
+	state      map[string]string // post id → status changed by the management commands
+	patched    []map[string]any
+	scheduleIn []map[string]any
+}
+
+func postID(n int) string { return fmt.Sprintf("%08d-0000-4000-8000-000000000000", n) }
+
+// postIndex: the position in f.posts of a post id ("…/api/posts/<id>/…"), -1 if none.
+func (f *fakeServer) postIndex(path string) int {
+	rest := strings.TrimPrefix(path, "/api/posts/")
+	id, _, _ := strings.Cut(rest, "/")
+	for i := range f.posts {
+		if postID(i+1) == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
-	f := &fakeServer{t: t, permission: "PUBLISH", assets: map[string]string{}, usedHashes: map[string]string{}}
+	f := &fakeServer{t: t, permission: "PUBLISH", assets: map[string]string{}, usedHashes: map[string]string{}, state: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -141,6 +158,21 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			m["kind"], m["width"], m["height"], m["durationMs"] = "VIDEO", 1080, 1920, 20000
 		}
 		f.json(w, 200, m)
+	case path == "/api/accounts":
+		f.json(w, 200, []map[string]any{
+			{"id": "acc-fb", "platform": "FACEBOOK_PAGE", "displayName": "Memoshot", "status": "ACTIVE", "publishMode": "API"},
+			{"id": "acc-pi", "platform": "PINTEREST", "displayName": "Qirox", "handle": "qirox", "status": "REAUTH_REQUIRED", "publishMode": "API",
+				"settings": map[string]any{"default_board_id": "b2", "boards": []map[string]any{{"id": "b1", "name": "Apps"}, {"id": "b2", "name": "Design"}}}}})
+	case path == "/api/projects/p1/next-slot":
+		f.json(w, 200, map[string]any{"localDateTime": "2099-01-02T09:00:00", "timezone": "Asia/Dhaka"})
+	case path == "/api/posts" && r.Method == "GET":
+		var out []map[string]any
+		for i := len(f.posts) - 1; i >= 0; i-- {
+			p := f.postAt(i, "DRAFT")
+			out = append(out, p)
+		}
+		f.json(w, 200, out)
+	case strings.HasPrefix(path, "/api/posts/") && f.postIndex(path) >= 0 && f.manage(w, r, path, body):
 	case path == "/api/posts" && r.Method == "POST":
 		f.posts = append(f.posts, body)
 		f.json(w, 201, f.postFrom(body, "DRAFT"))
@@ -163,6 +195,59 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (f *fakeServer) postAt(i int, status string) map[string]any {
+	p := f.postFrom(f.posts[i], status)
+	p["id"] = postID(i + 1)
+	if s := f.state[postID(i+1)]; s != "" {
+		p["status"] = s
+	}
+	return p
+}
+
+// manage answers the post management calls (schedule again, unschedule, cancel, delete, edit); false = not handled.
+func (f *fakeServer) manage(w http.ResponseWriter, r *http.Request, path string, body map[string]any) bool {
+	i := f.postIndex(path)
+	id := postID(i + 1)
+	switch {
+	case r.Method == "DELETE":
+		if f.state[id] != "" && f.state[id] != "DRAFT" {
+			f.problem(w, 409, "not_a_draft", "Only drafts can be deleted")
+			return true
+		}
+		f.state[id] = "DELETED"
+		w.WriteHeader(204)
+	case r.Method == "PATCH":
+		f.patched = append(f.patched, body)
+		f.json(w, 200, f.postAt(i, "DRAFT"))
+	case strings.HasSuffix(path, "/unschedule"):
+		f.state[id] = "DRAFT"
+		f.json(w, 200, f.postAt(i, "DRAFT"))
+	case strings.HasSuffix(path, "/cancel"):
+		f.state[id] = "CANCELLED"
+		f.json(w, 200, f.postAt(i, "CANCELLED"))
+	case strings.HasSuffix(path, "/schedule"):
+		if f.state[id] == "SCHEDULED" { // like the server: a scheduled post is moved by unscheduling first
+			f.problem(w, 409, "invalid_state", "Post is SCHEDULED")
+			return true
+		}
+		f.scheduleIn = append(f.scheduleIn, body)
+		f.scheduled = append(f.scheduled, path)
+		f.state[id] = "SCHEDULED"
+		f.json(w, 200, f.postAt(i, "SCHEDULED"))
+	case r.Method == "GET" && f.state[id] != "":
+		f.json(w, 200, f.postAt(i, f.state[id]))
+	case r.Method == "GET": // published by now (what `post --wait` watches)
+		post := f.postAt(i, "COMPLETED")
+		for _, d := range post["destinations"].([]map[string]any) {
+			d["status"], d["publishedUrl"] = "PUBLISHED", "https://social/p"
+		}
+		f.json(w, 200, post)
+	default:
+		return false
+	}
+	return true
+}
+
 func (f *fakeServer) postFrom(body map[string]any, status string) map[string]any {
 	var dests []map[string]any
 	for i, d := range body["destinations"].([]any) {
@@ -170,7 +255,7 @@ func (f *fakeServer) postFrom(body map[string]any, status string) map[string]any
 		dests = append(dests, map[string]any{"id": fmt.Sprintf("d%d", i), "accountId": m["accountId"], "platform": "INSTAGRAM", "accountName": m["accountId"],
 			"format": m["format"], "status": "DRAFT", "finalText": body["baseCaption"]})
 	}
-	return map[string]any{"id": fmt.Sprintf("post-%d", len(f.posts)), "projectId": "p1", "status": status, "baseCaption": body["baseCaption"],
+	return map[string]any{"id": postID(len(f.posts)), "projectId": "p1", "status": status, "baseCaption": body["baseCaption"],
 		"timezone": "Asia/Dhaka", "destinations": dests}
 }
 
