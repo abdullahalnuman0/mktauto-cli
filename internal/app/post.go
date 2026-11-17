@@ -44,6 +44,7 @@ type postFlags struct {
 	when, duplicates                                string
 	dryRun, jsonOut, yes, wait                      bool
 	name, pinLink, tiktokBrand, tiktokDraftFor      string
+	template, hashtagSet                            string
 	// ACCOUNT=value, repeatable: that account's own value (ADR-076)
 	captionFor, captionFileFor, titleFor, youtubePrivacyFor, boardFor, pinLinkFor multiFlag
 	tiktokPrivacyFor, tiktokAllowFor, tiktokBrandFor                              multiFlag
@@ -100,6 +101,8 @@ func newPostFlags(f *postFlags) *flag.FlagSet {
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
 	fs.BoolVar(&f.yes, "yes", false, "don't ask for confirmation")
 	fs.BoolVar(&f.wait, "wait", false, "after publishing now, wait for the result")
+	fs.StringVar(&f.template, "template", "", "start from a template saved on the website (name or id)")
+	fs.StringVar(&f.hashtagSet, "hashtag-set", "", "add the hashtags of these saved sets (comma-separated names)")
 	fs.StringVar(&f.name, "name", "", "the post's internal name (only you see it; default: --title)")
 	fs.StringVar(&f.pinLink, "pin-link", "", "the Pin's link on Pinterest (default: --link)")
 	fs.StringVar(&f.tiktokBrand, "tiktok-brand", "", "TikTok commercial content: yours (your brand), partner (branded content) or both: yours,partner")
@@ -162,10 +165,26 @@ type poster struct {
 	tiktok      map[string]*api.TikTokCreatorInfo
 	aiOffIDs    []string                     // accounts the AI label was turned off for
 	forv        map[string]map[string]string // per-account flags: flag → accountId → value
+
+	presetsLoaded bool
+	templates     []api.Template
+	sets          []api.HashtagSet
+	groups        []api.AccountGroup
+	template      *api.Template // chosen
+	applied       *api.Template // whose values are in the texts
+	appliedID     string
+	setIDs        []string // hashtag sets ticked in the wizard
+
+	ctx       context.Context
+	aiChecked bool
+	aiStatus  *api.AIStatus
+	wantAI    bool // "AI caption help" ticked on the texts screen
+	result    *api.Post // what was saved (batch reports it)
 }
 
 func (p *poster) run(ctx context.Context) error {
 	e := p.env
+	p.ctx = ctx
 	var err error
 	if p.c, err = e.client(); err != nil {
 		return err
@@ -188,6 +207,7 @@ func (p *poster) run(ctx context.Context) error {
 	steps := []step{
 		{"project", func() error { return p.chooseProject(ctx) }},
 		{"", func() error { return p.loadAccounts(ctx) }},
+		{"template", func() error { return p.chooseTemplate(ctx) }},
 		{"content", p.chooseKind},
 		{"files", p.chooseFiles},
 		{"accounts", p.chooseAccounts},
@@ -197,6 +217,7 @@ func (p *poster) run(ctx context.Context) error {
 		{"", func() error { return p.uploadFiles(ctx) }},
 		{"per account", p.choosePerAccount},
 		{"texts", p.details},
+		{"ai caption", func() error { return p.aiHelp(ctx) }},
 		{"captions", p.captionsPerAccount},
 		{"ai", p.aiPerAccount},
 		{"platforms", func() error { return p.platformSettings(ctx) }},
@@ -526,8 +547,15 @@ func (p *poster) chooseAccounts() error {
 	accounts := p.projAcc
 	if !p.wizard {
 		terms := splitList(p.f.accounts)
+		if len(terms) == 0 && p.template != nil {
+			terms = p.template.AccountIDs
+		}
 		if len(terms) == 0 {
 			terms = p.defaults.Accounts
+		}
+		terms, err := p.expandGroups(terms)
+		if err != nil {
+			return err
 		}
 		if len(terms) == 0 {
 			return errors.New("choose accounts with --accounts (names, @handles, ids or platforms)")
@@ -571,6 +599,11 @@ func (p *poster) chooseAccounts() error {
 	for _, a := range p.chosen {
 		pre[a.AccountID] = true
 	}
+	if len(pre) == 0 && p.template != nil {
+		for _, id := range p.template.AccountIDs {
+			pre[id] = true
+		}
+	}
 	if len(pre) == 0 && len(p.defaults.Accounts) > 0 {
 		if m, err := compose.MatchAccounts(p.defaults.Accounts, fit); err == nil {
 			for _, a := range m {
@@ -588,13 +621,25 @@ func (p *poster) chooseAccounts() error {
 			pre[a.AccountID] = true
 		}
 	}
-	opts := make([]huh.Option[string], len(fit))
-	for i, a := range fit {
+	var opts []huh.Option[string]
+	// Account groups first: ticking one ticks its accounts (those that can post this).
+	for _, g := range p.groups {
+		n := 0
+		for _, a := range fit {
+			if slices.Contains(g.AccountIDs, a.AccountID) {
+				n++
+			}
+		}
+		if n > 0 {
+			opts = append(opts, huh.NewOption(brand.Render("◆ ")+g.Name+faint.Render(fmt.Sprintf(" · group, %s", plural(n, "account"))), "group:"+g.ID))
+		}
+	}
+	for _, a := range fit {
 		label := accountLabel(a)
 		if f, _ := compose.Fit(a.Platform, files); f != "" && !hasVideo {
 			label += faint.Render(" → " + compose.FormatLabel[f])
 		}
-		opts[i] = huh.NewOption(label, a.AccountID).Selected(pre[a.AccountID])
+		opts = append(opts, huh.NewOption(label, a.AccountID).Selected(pre[a.AccountID]))
 	}
 	desc := "accounts that can post " + p.kindText() + " · space to tick, enter to continue"
 	if len(notes) > 0 {
@@ -602,12 +647,17 @@ func (p *poster) chooseAccounts() error {
 	}
 	var ids []string
 	if err := p.ask.form(huh.NewMultiSelect[string]().Title("Accounts").Description(desc).Options(opts...).Value(&ids).
+		Height(min(len(opts)+3+strings.Count(desc, "\n"), 22)).
 		Validate(func(v []string) error {
 			if len(v) == 0 {
 				return errors.New("tick at least one account")
 			}
 			return nil
 		})); err != nil {
+		return err
+	}
+	ids, err := p.expandGroups(ids) // a ticked group ticks its accounts
+	if err != nil {
 		return err
 	}
 	p.chosen = nil
@@ -1233,6 +1283,7 @@ func (p *poster) initTexts() error {
 				}
 			}
 		}
+		p.applyTemplate()
 		return nil
 	}
 	p.textsSet = true
@@ -1256,6 +1307,7 @@ func (p *poster) initTexts() error {
 	plan.FirstComment = firstNonEmpty(p.f.firstComm, p.defaults.FirstComment)
 	plan.MadeWithAI = p.f.ai || (p.defaults.MadeWithAI != nil && *p.defaults.MadeWithAI)
 	plan.InternalTitle = firstNonEmpty(p.f.name, p.f.title)
+	p.applyTemplate()
 	return nil
 }
 
@@ -1283,12 +1335,28 @@ func (p *poster) details() error {
 		if needsComment {
 			fields = append(fields, huh.NewInput().Title("First comment").Description("Facebook Pages and Instagram, right after the post goes live").Value(&plan.FirstComment))
 		}
+		if len(p.sets) > 0 {
+			var setOpts []huh.Option[string]
+			for _, s := range p.sets {
+				setOpts = append(setOpts, huh.NewOption(s.Name+faint.Render("  #"+strings.Join(s.Tags, " #")), s.ID).Selected(slices.Contains(p.setIDs, s.ID)))
+			}
+			fields = append(fields, huh.NewMultiSelect[string]().Title("Hashtag sets").Description("their hashtags are added to the ones above").
+				Options(setOpts...).Value(&p.setIDs).Height(min(len(setOpts)+1, 8)))
+		}
+		if p.aiReady(p.ctx) {
+			fields = append(fields, huh.NewConfirm().Title("AI caption help next?").
+				Description("improve, shorten, change the tone, translate or suggest hashtags · "+p.aiUsage()).Value(&p.wantAI))
+		}
 		fields = append(fields, huh.NewConfirm().Title("Made with AI?").Description("Adds each platform's own AI label (none exists on Facebook)").Value(&plan.MadeWithAI))
 		if err := p.ask.form(fields...); err != nil {
 			return err
 		}
 	}
-	plan.Hashtags = compose.ParseHashtags(p.hashtags)
+	tags, err := p.hashtagsWithSets()
+	if err != nil {
+		return err
+	}
+	plan.Hashtags = tags
 	return nil
 }
 
@@ -1418,6 +1486,9 @@ func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
 				opts = append(opts, huh.NewOption("Keep what I wrote for it", "keep"), huh.NewOption("Edit it", "edit"))
 			}
 			opts = append(opts, huh.NewOption("Start with an empty box", "empty"), huh.NewOption("Edit a copy of the main caption", "copy"))
+			if limit > 0 && limit < 10000 && strings.TrimSpace(plan.Caption) != "" && p.aiReady(p.ctx) {
+				opts = append(opts, huh.NewOption(fmt.Sprintf("Let AI shorten the main caption to fit %s", compose.PlatformLabel[a.Platform]), "ai"))
+			}
 			start := p.captionHow[a.AccountID]
 			if !slices.ContainsFunc(opts, func(o huh.Option[string]) bool { return o.Value == start }) {
 				start = opts[0].Value
@@ -1449,6 +1520,12 @@ func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
 				text = p.ownCaption[a.AccountID]
 			case "copy":
 				text = plan.Caption
+			case "ai":
+				short, err := p.aiShortenFor(p.ctx, a, limit)
+				if err != nil {
+					p.env.printf("%s %v\n", red.Render("✗"), err)
+				}
+				text = firstNonEmpty(short, plan.Caption)
 			}
 			count := func() string {
 				n := p.finalLength(a.Platform, text)
@@ -2072,6 +2149,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 		label = "approval"
 	}
 	p.remember(result, label)
+	p.result = result
 	switch label {
 	case "draft":
 		e.printf("%s Draft saved. Finish it on the website: mktauto open %s\n", green.Render("✓"), result.ID)
@@ -2250,13 +2328,15 @@ ACCOUNT = an account name, @handle, id or platform (facebook, instagram, threads
 
 What and where
   --project NAME              project (name or id)
-  --accounts A,B              accounts to post to
+  --accounts A,B              accounts to post to (group:NAME = an account group saved on the website)
+  --template NAME             start from a saved template (caption, hashtags, link, first comment, accounts)
   --files a.png,b.mp4         files in posting order ("all" = every file; none = text only)
   --only ACCOUNT=1,3          that account gets only these files (positions in --files), in this order; repeatable
 
 Texts (for every account)
   --caption TEXT  | --caption-file FILE
   --hashtags "android kotlin"
+  --hashtag-set A,B           add the hashtags of saved sets
   --link URL                  link preview on Facebook and Threads, the Pin's link
   --first-comment TEXT        Facebook Pages and Instagram
   --title TEXT                YouTube, Pinterest and TikTok photo title

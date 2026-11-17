@@ -303,3 +303,42 @@ type TikTokCreatorInfo struct {
 	StitchDisabled         bool     `json:"stitchDisabled"`
 	Audited                bool     `json:"audited"`
 }
+
+type AIStatus struct {
+	Enabled    bool   `json:"enabled"`
+	Model      string `json:"model"`
+	UsedToday  int    `json:"usedToday"`
+	DailyLimit int    `json:"dailyLimit"`
+}
+
+type AIRequest struct {
+	Action    string `json:"action"`
+	Text      string `json:"text"`
+	Platform  string `json:"platform,omitempty"`
+	MaxLength int    `json:"maxLength,omitempty"`
+	Language  string `json:"language,omitempty"`
+}
+
+type AIResult struct {
+	Suggestions []string `json:"suggestions"`
+	Hashtags    []string `json:"hashtags"`
+	UsedToday   int      `json:"usedToday"`
+	DailyLimit  int      `json:"dailyLimit"`
+}
+
+// Template is a saved starting point for a post (website: Compose → templates).
+type Template struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Caption      string   `json:"caption"`
+	Hashtags     []string `json:"hashtags"`
+	LinkURL      string   `json:"linkUrl"`
+	FirstComment string   `json:"firstComment"`
+	AccountIDs   []string `json:"accountIds"`
+}
+
+type AccountGroup struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	AccountIDs []string `json:"accountIds"`
+}

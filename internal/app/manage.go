@@ -402,7 +402,7 @@ func (e *Env) unschedule(ctx context.Context, args []string) error {
 func (e *Env) publish(ctx context.Context, args []string) error {
 	fs := e.flags("publish", "publish POST [--yes] [--wait]   (publish a saved post now)")
 	yes := fs.Bool("yes", false, "don't ask")
-	wait := fs.Bool("wait", false, "wait for each account's result")
+	wait := fs.Bool("wait", e.Interactive, "wait for each account's result (in a terminal by default; --wait=false not)")
 	c, p, err := e.postArg(ctx, fs, args)
 	if err != nil {
 		return err
@@ -420,7 +420,7 @@ func (e *Env) publish(ctx context.Context, args []string) error {
 		return nil
 	}
 	e.printf("%s Publishing…\n", green.Render("✓"))
-	if *wait || e.Interactive {
+	if *wait {
 		(&poster{env: e, c: c}).watch(ctx, p.ID)
 	}
 	return nil
@@ -514,71 +514,41 @@ func (e *Env) edit(ctx context.Context, args []string) error {
 	return nil
 }
 
-// ------------------------------------------------------------------ the menu's "Saved posts"
+// ------------------------------------------------------------------ actions on one post (dashboard and menu)
 
-// managePosts: pick a recent post, then what to do with it (the same commands as above, with questions).
-func (e *Env) managePosts(ctx context.Context) error {
-	c, err := e.client()
-	if err != nil {
-		return err
-	}
-	me, err := e.me(ctx, c)
-	if err != nil {
-		return err
-	}
-	posts, err := c.Posts(ctx, time.Now().Add(-30*24*time.Hour))
-	if err != nil {
-		return err
-	}
-	if len(posts) == 0 {
-		e.printf("No posts in the last 30 days.\n")
-		return nil
-	}
-	posts = posts[:min(len(posts), 25)]
-	opts := make([]huh.Option[string], len(posts))
-	for i, p := range posts {
-		when := ""
-		if p.ScheduledAt != nil {
-			when = " · " + p.ScheduledAt.Local().Format("2 Jan 15:04")
-		}
-		opts[i] = huh.NewOption(fmt.Sprintf("%-42s %s%s", truncate(p.Title(), 42), statusText(p.Status), faint.Render(when)), p.ID)
-	}
-	id := posts[0].ID
-	if err := huh.NewSelect[string]().Title("Saved posts (last 30 days)").Options(opts...).Value(&id).Height(min(len(opts)+2, 16)).Run(); err != nil {
-		return nil // Esc: back to the menu
-	}
-	p, err := c.Post(ctx, id)
-	if err != nil {
-		return err
-	}
-	e.printPost(p)
-	type action struct{ label, key, needs string }
-	var acts []action
+type postAction struct{ key, label, needs string }
+
+// actionsFor: what can be done with a post in its status, by this terminal.
+func actionsFor(p *api.Post, me *api.Me) []postAction {
+	var acts []postAction
 	switch p.Status {
 	case "DRAFT":
-		acts = []action{{"Schedule it", "schedule", "SCHEDULE"}, {"Publish now", "publish", "PUBLISH"}, {"Edit the caption", "edit", "DRAFT"},
-			{"Delete this draft", "delete", "DRAFT"}}
+		acts = []postAction{{"s", "schedule", "SCHEDULE"}, {"p", "publish now", "PUBLISH"}, {"e", "edit caption", "DRAFT"}, {"d", "delete", "DRAFT"}}
 	case "SCHEDULED", "PENDING_APPROVAL":
-		acts = []action{{"Move it to another time", "schedule", "SCHEDULE"}, {"Back to a draft (unschedule)", "unschedule", "SCHEDULE"},
-			{"Publish now", "publish", "PUBLISH"}, {"Edit the caption", "edit", "DRAFT"}, {"Cancel it", "cancel", "SCHEDULE"}}
+		acts = []postAction{{"s", "move", "SCHEDULE"}, {"u", "unschedule", "SCHEDULE"}, {"p", "publish now", "PUBLISH"}, {"e", "edit caption", "DRAFT"},
+			{"c", "cancel", "SCHEDULE"}}
 	case "PUBLISHING", "PARTIALLY_FAILED", "FAILED":
-		acts = []action{{"Publish the failed accounts again", "retry", "PUBLISH"}, {"Cancel what isn't published yet", "cancel", "SCHEDULE"}}
+		acts = []postAction{{"r", "retry failed", "PUBLISH"}, {"c", "cancel the rest", "SCHEDULE"}}
 	}
-	choices := []huh.Option[string]{}
+	var out []postAction
 	for _, a := range acts {
-		if me.Allows(a.needs) {
-			choices = append(choices, huh.NewOption(a.label, a.key))
+		if me == nil || me.Allows(a.needs) {
+			out = append(out, a)
 		}
 	}
-	choices = append(choices, huh.NewOption("Open it on the website", "open"), huh.NewOption("Back", "back"))
-	what := choices[0].Value
-	if err := huh.NewSelect[string]().Title("What now?").Options(choices...).Value(&what).Run(); err != nil || what == "back" {
-		return nil
-	}
-	switch what {
-	case "schedule":
+	return append(out, postAction{"o", "open on the website", ""})
+}
+
+// runPostAction does one action, asking what it needs (a time, the new caption, a confirmation).
+func (e *Env) runPostAction(ctx context.Context, p *api.Post, key string) error {
+	id := p.ID
+	switch key {
+	case "s":
 		how, at := "slot", time.Now().Add(time.Hour).Format("2006-01-02 15:00")
-		if err := huh.NewSelect[string]().Title("When").Options(huh.NewOption("Next free posting slot", "slot"),
+		if p.LocalDateTime != "" {
+			at = strings.Replace(p.LocalDateTime[:min(16, len(p.LocalDateTime))], "T", " ", 1)
+		}
+		if err := huh.NewSelect[string]().Title("When: "+truncate(p.Title(), 50)).Options(huh.NewOption("Next free posting slot", "slot"),
 			huh.NewOption("At a time I choose", "at")).Value(&how).Run(); err != nil {
 			return nil
 		}
@@ -590,18 +560,28 @@ func (e *Env) managePosts(ctx context.Context) error {
 			return nil
 		}
 		return e.schedule(ctx, []string{id, "--at", at})
-	case "edit":
+	case "e":
 		text := p.BaseCaption
-		if err := huh.NewText().Title("Caption").Description("ctrl+e opens your editor").Value(&text).Lines(6).CharLimit(63000).
-			ExternalEditor(true).Run(); err != nil {
+		if err := huh.NewText().Title("Caption: " + truncate(p.Title(), 50)).Description("ctrl+e opens your editor").Value(&text).Lines(8).CharLimit(63000).
+			ExternalEditor(true).Run(); err != nil || text == p.BaseCaption {
 			return nil
 		}
 		return e.edit(ctx, []string{id, "--caption", text})
-	case "retry":
+	case "p":
+		return e.publish(ctx, []string{id})
+	case "u":
+		return e.unschedule(ctx, []string{id})
+	case "c":
+		return e.cancel(ctx, []string{id})
+	case "d":
+		return e.deletePost(ctx, []string{id})
+	case "r":
 		return e.retry(ctx, []string{id})
-	case "open":
+	case "o":
 		return e.open(ctx, []string{id})
 	}
-	return map[string]func(context.Context, []string) error{"publish": e.publish, "unschedule": e.unschedule, "cancel": e.cancel,
-		"delete": e.deletePost}[what](ctx, []string{id})
+	return nil
 }
+
+// managePosts: the menu's "Saved posts" is the posts dashboard.
+func (e *Env) managePosts(ctx context.Context) error { return e.posts(ctx, nil) }

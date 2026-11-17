@@ -38,6 +38,7 @@ type fakeServer struct {
 	state      map[string]string // post id → status changed by the management commands
 	patched    []map[string]any
 	scheduleIn []map[string]any
+	aiCalls    []map[string]any
 }
 
 func postID(n int) string { return fmt.Sprintf("%08d-0000-4000-8000-000000000000", n) }
@@ -163,6 +164,24 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			{"id": "acc-fb", "platform": "FACEBOOK_PAGE", "displayName": "Memoshot", "status": "ACTIVE", "publishMode": "API"},
 			{"id": "acc-pi", "platform": "PINTEREST", "displayName": "Qirox", "handle": "qirox", "status": "REAUTH_REQUIRED", "publishMode": "API",
 				"settings": map[string]any{"default_board_id": "b2", "boards": []map[string]any{{"id": "b1", "name": "Apps"}, {"id": "b2", "name": "Design"}}}}})
+	case path == "/api/projects/p1/next-slots":
+		var out []map[string]any
+		for i := 0; i < 3; i++ { // only three free posting times
+			out = append(out, map[string]any{"localDateTime": fmt.Sprintf("2099-01-%02dT09:00:00", i+2), "timezone": "Asia/Dhaka"})
+		}
+		f.json(w, 200, out)
+	case path == "/api/post-templates":
+		f.json(w, 200, []map[string]any{{"id": "t1", "name": "Weekly tip", "caption": "Tip of the week", "hashtags": []string{"tips"},
+			"linkUrl": "https://memoshot.app", "firstComment": "", "accountIds": []string{"acc-fb", "acc-ig"}}})
+	case path == "/api/hashtag-sets":
+		f.json(w, 200, []map[string]any{{"id": "h1", "name": "Android", "tags": []string{"android", "kotlin", "tips"}}})
+	case path == "/api/account-groups":
+		f.json(w, 200, []map[string]any{{"id": "g1", "name": "Launch", "accountIds": []string{"acc-ig", "acc-tt"}}})
+	case path == "/api/ai/status":
+		f.json(w, 200, map[string]any{"enabled": true, "model": "test", "usedToday": 1, "dailyLimit": 20})
+	case path == "/api/ai/caption":
+		f.aiCalls = append(f.aiCalls, body)
+		f.json(w, 200, map[string]any{"suggestions": []string{"Short one", "Another"}, "hashtags": []string{"apps"}, "usedToday": 2, "dailyLimit": 20})
 	case path == "/api/projects/p1/next-slot":
 		f.json(w, 200, map[string]any{"localDateTime": "2099-01-02T09:00:00", "timezone": "Asia/Dhaka"})
 	case path == "/api/posts" && r.Method == "GET":

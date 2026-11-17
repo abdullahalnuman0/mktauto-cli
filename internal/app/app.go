@@ -49,6 +49,8 @@ const usage = `mktauto: post to your MKTAuto accounts from a folder.
 Usage:
   mktauto                    menu (signs in first when needed)
   mktauto post [flags]       post files from this folder (no flags: step by step; -h lists every flag)
+  mktauto batch              one post per file or subfolder, in the next free posting times (or drafts)
+  mktauto import FILE.csv    one post per spreadsheet row (--example prints one)
 
 Find what to post to:
   mktauto projects           projects this terminal may post to
@@ -56,6 +58,7 @@ Find what to post to:
   mktauto boards ACCOUNT     a Pinterest account's boards
 
 Saved posts (POST = an id, its first characters as status shows them, or "last"):
+  mktauto posts              full screen: search, filter by status, one key to schedule/publish/edit/cancel/delete
   mktauto status [POST]      recent posts, or one post's accounts
   mktauto edit POST          change caption, hashtags, link or name (--caption, --hashtags, --link, --name)
   mktauto schedule POST      schedule or move it (--at "YYYY-MM-DD HH:MM" or --next-slot)
@@ -66,6 +69,9 @@ Saved posts (POST = an id, its first characters as status shows them, or "last")
   mktauto retry POST         publish failed accounts again
   mktauto open [POST]        open the website (or the post) in the browser
   mktauto history [--all]    what was posted from this folder
+
+Write:
+  mktauto ai ACTION TEXT     AI caption help: improve, shorten, professional, casual, hashtags, translate
 
 This computer:
   mktauto login              sign in (browser approval or QR code; --code for a login code)
@@ -193,6 +199,14 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.deletePost(ctx, args)
 	case "edit":
 		return e.edit(ctx, args)
+	case "ai":
+		return e.aiCommand(ctx, args)
+	case "posts":
+		return e.posts(ctx, args)
+	case "batch":
+		return e.batch(ctx, args)
+	case "import":
+		return e.importCSV(ctx, args)
 	case "update":
 		return e.update(ctx, args)
 	case "version", "--version", "-v":

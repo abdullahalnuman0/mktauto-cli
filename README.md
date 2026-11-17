@@ -63,6 +63,32 @@ mktauto post --project Memoshot --accounts facebook,instagram,tiktok \
 `ACCOUNT=value` flags: `--caption-for instagram="…"`, `--title-for youtube="…"`, `--tiktok-privacy-for @me=SELF_ONLY`,
 `--board-for pinterest=<id>`, `--tiktok-brand yours,partner` and more.
 
+### Many posts at once
+
+```sh
+mktauto batch                       # step by step: one post per image, video or subfolder
+mktauto batch --each video --project Memoshot --accounts instagram,tiktok --when next-slot --tiktok-privacy SELF_ONLY
+mktauto batch --each folder --project Memoshot --accounts facebook --when "2026-12-01 10:00" --every 2d
+mktauto import plan.csv             # one post per spreadsheet row; mktauto import --example prints one
+```
+
+Each post's caption comes from its own `.txt` (or `caption.txt` in a subfolder), else `--caption` (`{name}` = the
+file name). The whole plan is shown before anything is uploaded; files already posted from the folder are skipped.
+
+### Templates, hashtag sets, account groups, AI
+
+Saved on the website, used here: the wizard offers templates first, account groups at the top of the account list
+(ticking one ticks its accounts) and hashtag sets next to the hashtags. In scripts: `--template "Weekly tip"`,
+`--hashtag-set Android`, `--accounts group:Launch`. With the AI helper set up on the server, the wizard offers
+"AI caption help" (improve, shorten to fit, tone, translate, hashtags), an account's own caption can be shortened by
+AI, and `mktauto ai shorten "…" --platform x` works in scripts.
+
+### Posts dashboard
+
+`mktauto posts` (or "Saved posts" in the menu): every recent post with its details, tabs by status, `/` to search,
+and one key to act: `s` schedule / move, `u` unschedule, `p` publish now, `e` edit caption, `c` cancel, `d` delete,
+`r` retry, `o` open. In every list of the wizard, `/` searches too.
+
 Find names and ids for scripts: `mktauto projects`, `mktauto accounts --project Memoshot`, `mktauto boards @account`
 (all with `--json`).
 

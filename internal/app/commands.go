@@ -73,7 +73,8 @@ func (e *Env) menu(ctx context.Context) error {
 		}
 		err := huh.NewSelect[string]().Title("Folder "+shortPath(e.Dir)).Options(
 			huh.NewOption(postLabel, "post"),
-			huh.NewOption("Saved posts: schedule, move, publish, edit, cancel, delete", "manage"),
+			huh.NewOption("Saved posts: search, schedule, move, publish, edit, cancel, delete", "manage"),
+			huh.NewOption("Post many at once: one per file or subfolder", "batch"),
 			huh.NewOption("Status of recent posts", "status"),
 			huh.NewOption("What was posted from this folder", "history"),
 			huh.NewOption("Who am I", "whoami"),
@@ -88,6 +89,8 @@ func (e *Env) menu(ctx context.Context) error {
 			err = e.post(ctx, nil)
 		case "manage":
 			err = e.managePosts(ctx)
+		case "batch":
+			err = e.batch(ctx, nil)
 		case "status":
 			err = e.status(ctx, nil)
 		case "history":

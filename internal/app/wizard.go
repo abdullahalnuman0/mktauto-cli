@@ -70,16 +70,34 @@ func uiErr(err error) error {
 
 // backable wraps a form so Esc means "back" (huh itself treats Esc and Ctrl+C alike).
 type backable struct {
-	form *huh.Form
-	back bool
+	form      *huh.Form
+	back      bool
+	searching bool
 }
 
 func (m *backable) Init() tea.Cmd { return m.form.Init() }
 
 func (m *backable) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
-		m.back = true
-		return m, tea.Quit
+	if k, ok := msg.(tea.KeyMsg); ok {
+		// Searching a list ("/", then type): Esc ends the search instead of going back.
+		field := m.form.GetFocusedField()
+		_, isInput := field.(*huh.Input)
+		_, isText := field.(*huh.Text)
+		switch k.String() {
+		case "/":
+			if !isInput && !isText {
+				m.searching = true
+			}
+		case "enter":
+			m.searching = false
+		case "esc":
+			if g, ok := field.(interface{ GetFiltering() bool }); (ok && g.GetFiltering()) || m.searching {
+				m.searching = false
+				break
+			}
+			m.back = true
+			return m, tea.Quit
+		}
 	}
 	f, cmd := m.form.Update(msg)
 	if ff, ok := f.(*huh.Form); ok {
@@ -92,7 +110,10 @@ func (m *backable) View() string {
 	if m.back || m.form.State != huh.StateNormal {
 		return ""
 	}
-	return m.form.View() + "\n" + faint.Render("esc back · ctrl+c cancel") + "\n"
+	if m.searching {
+		return m.form.View() + "\n" + faint.Render("type to search · enter picks · esc ends the search") + "\n"
+	}
+	return m.form.View() + "\n" + faint.Render("/ search · esc back · ctrl+c cancel") + "\n"
 }
 
 func runBackable(f *huh.Form) (bool, error) {

@@ -292,3 +292,35 @@ func (c *Client) UpdatePost(ctx context.Context, postID string, fields map[strin
 	_, err := c.do(ctx, http.MethodPatch, "/api/posts/"+url.PathEscape(postID), fields, &out)
 	return &out, err
 }
+
+// NextSlots: the project's next free posting times, in order (fewer when 8 weeks don't have that many).
+func (c *Client) NextSlots(ctx context.Context, projectID string, count int) ([]NextSlot, error) {
+	var out []NextSlot
+	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/projects/%s/next-slots?count=%d", url.PathEscape(projectID), count), nil, &out)
+	return out, err
+}
+
+func (c *Client) AIStatus(ctx context.Context) (*AIStatus, error) {
+	var out AIStatus
+	_, err := c.do(ctx, http.MethodGet, "/api/ai/status", nil, &out)
+	return &out, err
+}
+
+// AICaption asks the server's caption helper (IMPROVE, SHORTEN, PROFESSIONAL, CASUAL, HASHTAGS, TRANSLATE).
+func (c *Client) AICaption(ctx context.Context, r AIRequest) (*AIResult, error) {
+	var out AIResult
+	_, err := c.do(ctx, http.MethodPost, "/api/ai/caption", r, &out)
+	return &out, err
+}
+
+func (c *Client) Templates(ctx context.Context) ([]Template, error) {
+	var out []Template
+	_, err := c.do(ctx, http.MethodGet, "/api/post-templates", nil, &out)
+	return out, err
+}
+
+func (c *Client) AccountGroups(ctx context.Context) ([]AccountGroup, error) {
+	var out []AccountGroup
+	_, err := c.do(ctx, http.MethodGet, "/api/account-groups", nil, &out)
+	return out, err
+}
