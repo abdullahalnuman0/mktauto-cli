@@ -31,29 +31,32 @@ type Plan struct {
 	// PerAccount: indexes into Items, in that account's order. Missing = all files in the post's order.
 	PerAccount map[string][]int
 
-	InternalTitle string
-	Caption       string
-	Hashtags      []string
-	Link          string
-	FirstComment  string
-	Captions      map[string]string // accountId → its own caption
-	Titles        map[string]string // YouTube / Pinterest / TikTok photo title
-	MadeWithAI    bool
-	AIOverride    map[string]bool // accountId → its own setting
-	TikTok        map[string]TikTokChoice
+	InternalTitle  string
+	Caption        string
+	Hashtags       []string
+	Link           string
+	FirstComment   string
+	Captions       map[string]string // accountId → its own caption
+	Titles         map[string]string // YouTube / Pinterest / TikTok photo title
+	MadeWithAI     bool
+	AIOverride     map[string]bool // accountId → its own setting
+	TikTok         map[string]TikTokChoice
 	YouTubePrivacy map[string]string // "", "unlisted", "private"
-	Boards        map[string]string // Pinterest board id ("" = the account's default)
-	PinLinks      map[string]string
-	CoverIndex    int // index into Items of the cover image for videos; -1 = none
-	CoverFrameMs  int // > 0: a frame of the video where an image cover isn't possible
-	When          When
-	RepeatDays    int    // > 0: comes back every N days (scheduled posts)
-	RepeatUntil   string // YYYY-MM-DD, "" = for good
+	Boards         map[string]string // Pinterest board id ("" = the account's default)
+	PinLinks       map[string]string
+	CoverIndex     int // index into Items of the cover image for videos; -1 = none
+	CoverFrameMs   int // > 0: a frame of the video where an image cover isn't possible
+	When           When
+	RepeatDays     int                 // > 0: comes back every N days (scheduled posts)
+	RepeatUntil    string              // YYYY-MM-DD, "" = for good
+	AltTexts       map[string]string   // file path → alt text (images; ADR-080)
+	Threads        map[string][]string // accountId → the thread's extra parts (X, Threads)
 }
 
 func NewPlan() *Plan {
 	return &Plan{PerAccount: map[string][]int{}, Captions: map[string]string{}, Titles: map[string]string{}, AIOverride: map[string]bool{},
-		TikTok: map[string]TikTokChoice{}, YouTubePrivacy: map[string]string{}, Boards: map[string]string{}, PinLinks: map[string]string{}, CoverIndex: -1}
+		TikTok: map[string]TikTokChoice{}, YouTubePrivacy: map[string]string{}, Boards: map[string]string{}, PinLinks: map[string]string{}, CoverIndex: -1,
+		AltTexts: map[string]string{}, Threads: map[string][]string{}}
 }
 
 // FilesFor is the account's files, in its order (cover image excluded from the post's media).
@@ -160,6 +163,14 @@ func (p *Plan) Input() (api.PostInput, error) {
 	if postOrder != nil {
 		in.MediaIDs = postOrder
 	}
+	for _, it := range p.Items {
+		if a := strings.TrimSpace(p.AltTexts[it.File.Path]); a != "" && it.Media.Kind == "IMAGE" {
+			if in.AltTexts == nil {
+				in.AltTexts = map[string]string{}
+			}
+			in.AltTexts[it.Media.ID] = a
+		}
+	}
 	var cover *Item
 	if p.CoverIndex >= 0 && p.CoverIndex < len(p.Items) {
 		cover = &p.Items[p.CoverIndex]
@@ -206,6 +217,9 @@ func (p *Plan) Input() (api.PostInput, error) {
 					d.Title = ptr(strings.TrimSpace(t))
 				}
 			}
+		}
+		if parts := p.Threads[a.AccountID]; len(parts) > 0 && (a.Platform == "X" || a.Platform == "THREADS") {
+			d.Options["thread"] = parts
 		}
 		if CommentsOn(a.Platform, format) && strings.TrimSpace(p.FirstComment) != "" {
 			d.FirstComment = ptr(strings.TrimSpace(p.FirstComment))

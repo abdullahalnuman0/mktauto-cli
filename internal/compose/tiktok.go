@@ -4,8 +4,8 @@ import "fmt"
 
 // TikTok's posting rules for apps (developers.tiktok.com content-sharing guidelines; web lib/tiktok.ts).
 const (
-	TikTokSelfOnly       = "SELF_ONLY"
-	TikTokMusicUsageURL  = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
+	TikTokSelfOnly         = "SELF_ONLY"
+	TikTokMusicUsageURL    = "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
 	TikTokBrandedPolicyURL = "https://www.tiktok.com/legal/page/global/bc-policy/en"
 )
 
@@ -15,14 +15,14 @@ var TikTokPrivacyLabel = map[string]string{
 
 // TikTokChoice: who can view, interactions (off unless the creator turns them on), commercial content, or an inbox draft.
 type TikTokChoice struct {
-	Privacy        string
-	AllowComments  bool
-	AllowDuet      bool
-	AllowStitch    bool
-	BrandDisclose  bool
-	BrandOrganic   bool // "Your brand"
-	BrandContent   bool // "Branded content" (paid partnership)
-	Draft          bool // send to the creator's TikTok inbox instead of posting
+	Privacy       string
+	AllowComments bool
+	AllowDuet     bool
+	AllowStitch   bool
+	BrandDisclose bool
+	BrandOrganic  bool // "Your brand"
+	BrandContent  bool // "Branded content" (paid partnership)
+	Draft         bool // send to the creator's TikTok inbox instead of posting
 }
 
 // Options are the destination options the server expects.

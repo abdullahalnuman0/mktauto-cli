@@ -238,6 +238,9 @@ func (m dashModel) detail(width int) string {
 		} else if d.PublishedURL != "" {
 			b.WriteString("  " + faint.Render(truncate(d.PublishedURL, width-2)) + "\n")
 		}
+		if l := threadLine(d); l != "" {
+			b.WriteString("  " + truncate(l, width+40) + "\n")
+		}
 	}
 	return b.String()
 }

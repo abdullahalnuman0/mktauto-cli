@@ -63,7 +63,7 @@ func TestInputGivesEachAccountItsOwnFilesOrderAndOptions(t *testing.T) {
 	acc := accounts()
 	p.Accounts = acc[:3]
 	p.Items = items(img("m1"), img("m2"), img("m3"), img("m4"), img("m5"))
-	p.PerAccount["tt"] = []int{2}         // TikTok: only the 3rd image
+	p.PerAccount["tt"] = []int{2}          // TikTok: only the 3rd image
 	p.PerAccount["ig"] = []int{1, 0, 2, 3} // Instagram: four, its own order
 	p.Caption, p.FirstComment, p.MadeWithAI = "  Launch  ", "More: https://x", true
 	p.AIOverride["ig"] = false
@@ -227,5 +227,37 @@ func TestVideoLengthKnownBeforeUpload(t *testing.T) {
 	}
 	if f, why := Fit("TIKTOK", []api.Media{{Kind: "VIDEO"}}); f != "VIDEO" || why != "" {
 		t.Errorf("length unknown: the server checks after upload: %q %q", f, why)
+	}
+}
+
+func TestSplitThread(t *testing.T) {
+	long := "Big news today. " + strings.Repeat("Exports are now much faster. ", 12) + "\n\nGet it now: https://reelwise.app"
+	parts := SplitThread("X", long, 280, 20)
+	if len(parts) < 2 {
+		t.Fatalf("split: %v", parts)
+	}
+	for i, p := range parts {
+		limit := 280
+		if i == 0 {
+			limit -= 20
+		}
+		if TextLength("X", p) > limit || strings.TrimSpace(p) == "" {
+			t.Errorf("part %d is %d chars: %q", i+1, TextLength("X", p), p)
+		}
+	}
+	if !strings.HasPrefix(parts[0], "Big news today.") || !strings.HasSuffix(parts[len(parts)-1], "https://reelwise.app") {
+		t.Errorf("sentences kept whole and in order: %q … %q", parts[0], parts[len(parts)-1])
+	}
+	if got := SplitThread("X", "short", 280, 0); len(got) != 1 || got[0] != "short" {
+		t.Errorf("short: %v", got)
+	}
+	if got := SplitThread("X", strings.Repeat("a", 600), 280, 0); len(got) != 3 || len([]rune(got[0])) != 280 {
+		t.Errorf("one long word is cut hard: %v", got)
+	}
+	if got := SplitParts("one\n---\ntwo\nlines\n --- \n\nthree\n---\n"); len(got) != 3 || got[1] != "two\nlines" {
+		t.Errorf("parts: %q", got)
+	}
+	if JoinParts([]string{"a", "b"}) != "a\n---\nb" {
+		t.Error("join")
 	}
 }

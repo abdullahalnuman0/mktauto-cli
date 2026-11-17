@@ -402,3 +402,14 @@ func (c *Client) ReadAll(ctx context.Context) error {
 	_, err := c.do(ctx, http.MethodPost, "/api/notifications/read-all", nil, nil)
 	return err
 }
+
+// AIAltText asks the server's AI to describe one of the user's images (it sees the image; ADR-080).
+func (c *Client) AIAltText(ctx context.Context, assetID, language string) (*AltTextResult, error) {
+	var out AltTextResult
+	body := map[string]string{"assetId": assetID}
+	if language != "" {
+		body["language"] = language
+	}
+	_, err := c.do(ctx, http.MethodPost, "/api/ai/alt-text", body, &out)
+	return &out, err
+}

@@ -208,7 +208,24 @@ func (e *Env) printPost(p *api.Post) {
 			line += "  " + yellow.Render("post it yourself, then mark it done on the website")
 		}
 		e.printf("%s\n", line)
+		if t := threadLine(d); t != "" {
+			e.printf("    %s\n", t)
+		}
 	}
+}
+
+// threadLine: how far a thread (X, Threads) got, or "".
+func threadLine(d api.Destination) string {
+	if d.ThreadStatus == "" || d.ThreadPosted == nil {
+		return ""
+	}
+	switch d.ThreadStatus {
+	case "POSTED":
+		return green.Render(fmt.Sprintf("thread: all %s posted", plural(*d.ThreadPosted, "reply")))
+	case "PARTIAL":
+		return yellow.Render(fmt.Sprintf("thread: %s posted · ", plural(*d.ThreadPosted, "reply")) + d.ThreadError)
+	}
+	return red.Render("thread: not posted · " + d.ThreadError)
 }
 
 func truncate(s string, n int) string {

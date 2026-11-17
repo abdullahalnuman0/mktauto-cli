@@ -105,6 +105,18 @@ mktauto stop-repeat 3f2a91c0
 The review screen (and `--dry-run`) shows the exact text each account gets, with the hashtags added and its length
 against the platform's limit.
 
+### Alt text and threads
+
+The wizard asks for alt text for the images (a short description for people who can't see them; X, Instagram,
+Threads, Facebook Pages and Pinterest use it): type it, or let the AI write it after looking at each image, then check
+it. For an X or Threads account, "Split the main caption into a thread" turns a long caption into a thread of
+replies; in its own caption a line with `---` starts the next reply.
+
+```sh
+mktauto post … --files a.png,b.png --alt a.png="The editor on a phone" --alt-ai   # AI writes the missing ones
+mktauto post … --accounts x,threads --caption-file long.txt --thread-for x,threads
+```
+
 ### Watch a folder, best times, presets
 
 ```sh

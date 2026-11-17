@@ -36,6 +36,20 @@ func (p *poster) aiUsage() string {
 	return fmt.Sprintf("%d of %d AI requests used today", p.aiStatus.UsedToday, p.aiStatus.DailyLimit)
 }
 
+// spin runs work with a spinner in a terminal.
+func (p *poster) spin(title string, work func() error) error {
+	return ui.Spin(title, p.env.Interactive, work)
+}
+
+// apiDetail: the server's own words for a refusal.
+func apiDetail(err error) error {
+	var prob *api.Problem
+	if errors.As(err, &prob) && prob.Detail != "" {
+		return errors.New(prob.Detail)
+	}
+	return err
+}
+
 // askAI calls the helper with a spinner and remembers the day's usage.
 func (p *poster) askAI(ctx context.Context, r api.AIRequest) (*api.AIResult, error) {
 	var res *api.AIResult

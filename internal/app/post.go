@@ -47,6 +47,9 @@ type postFlags struct {
 	template, hashtagSet                            string
 	repeat, repeatUntil                             string
 	preset                                          string
+	alt                                             multiFlag // FILE=TEXT
+	altAI                                           bool
+	threadFor                                       string
 	// ACCOUNT=value, repeatable: that account's own value (ADR-076)
 	captionFor, captionFileFor, titleFor, youtubePrivacyFor, boardFor, pinLinkFor multiFlag
 	tiktokPrivacyFor, tiktokAllowFor, tiktokBrandFor                              multiFlag
@@ -109,6 +112,9 @@ func newPostFlags(f *postFlags) *flag.FlagSet {
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
 	fs.BoolVar(&f.yes, "yes", false, "don't ask for confirmation")
 	fs.BoolVar(&f.wait, "wait", false, "after publishing now, wait for the result")
+	fs.Var(&f.alt, "alt", "FILE=TEXT: an image's alt text (a description for people who can't see it); repeatable")
+	fs.BoolVar(&f.altAI, "alt-ai", false, "let the AI write alt text for the images that have none")
+	fs.StringVar(&f.threadFor, "thread-for", "", "comma-separated X / Threads accounts whose too-long caption becomes a thread of replies")
 	fs.StringVar(&f.preset, "preset", "", "start from a saved preset (mktauto preset list); flags given here win")
 	fs.StringVar(&f.repeat, "repeat", "", "post it again every: daily, weekly, biweekly, monthly or N days (with a time)")
 	fs.StringVar(&f.repeatUntil, "repeat-until", "", "the last day of the repeats, YYYY-MM-DD (default: until stopped)")
@@ -193,6 +199,7 @@ type poster struct {
 	aiStatus  *api.AIStatus
 	wantAI    bool      // "AI caption help" ticked on the texts screen
 	result    *api.Post // what was saved (batch reports it)
+	altMode   string    // none / write / ai
 }
 
 func (p *poster) run(ctx context.Context) error {
@@ -230,6 +237,7 @@ func (p *poster) run(ctx context.Context) error {
 		{"cover", p.chooseCover},
 		{"", func() error { return p.uploadFiles(ctx) }},
 		{"per account", p.choosePerAccount},
+		{"alt text", p.altTextStep},
 		{"texts", p.details},
 		{"ai caption", func() error { return p.aiHelp(ctx) }},
 		{"captions", p.captionsPerAccount},
@@ -1411,6 +1419,28 @@ func (p *poster) captionsPerAccount() error {
 				plan.Captions[a.AccountID] = v
 			}
 		}
+		// Threads (X, Threads): an own caption with "---" lines, or --thread-for to split a too-long one.
+		clear(plan.Threads)
+		threadFor := mustMatch(splitList(p.f.threadFor), plan.Accounts)
+		for _, a := range plan.Accounts {
+			text, own := plan.Captions[a.AccountID]
+			if !own {
+				text = plan.Caption
+			}
+			if main, parts := threadOf(a.Platform, text); len(parts) > 0 {
+				plan.Captions[a.AccountID], plan.Threads[a.AccountID] = main, parts
+				continue
+			}
+			if slices.ContainsFunc(threadFor, func(x api.ProjectAccount) bool { return x.AccountID == a.AccountID }) {
+				if !compose.ThreadPlatform(a.Platform) {
+					return fmt.Errorf("--thread-for: %s isn't X or Threads", accountLabel(a))
+				}
+				parts := p.splitFor(a, text)
+				if len(parts) > 1 {
+					plan.Captions[a.AccountID], plan.Threads[a.AccountID] = parts[0], parts[1:]
+				}
+			}
+		}
 		over := p.tooLong(func(a api.ProjectAccount) string {
 			if c, ok := plan.Captions[a.AccountID]; ok {
 				return c
@@ -1419,7 +1449,11 @@ func (p *poster) captionsPerAccount() error {
 		})
 		for _, a := range plan.Accounts {
 			if l, ok := over[a.AccountID]; ok {
-				p.env.printf("%s %s (give it its own with --caption-for)\n", yellow.Render("!"), l)
+				hint := "give it its own with --caption-for"
+				if compose.ThreadPlatform(a.Platform) {
+					hint += ", or make it a thread with --thread-for " + platformShortName(a.Platform)
+				}
+				p.env.printf("%s %s (%s)\n", yellow.Render("!"), l, hint)
 			}
 		}
 		return nil
@@ -1454,6 +1488,7 @@ func (p *poster) captionsPerAccount() error {
 		{run: func() error {
 			if p.captionMode == "same" {
 				clear(plan.Captions)
+				clear(plan.Threads)
 				return nil
 			}
 			var ids []string
@@ -1500,6 +1535,7 @@ func (p *poster) captionsPerAccount() error {
 			for id := range plan.Captions {
 				if !slices.Contains(ids, id) {
 					delete(plan.Captions, id)
+					delete(plan.Threads, id)
 				}
 			}
 			return nil
@@ -1519,6 +1555,9 @@ func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
 				opts = append(opts, huh.NewOption("Keep what I wrote for it", "keep"), huh.NewOption("Edit it", "edit"))
 			}
 			opts = append(opts, huh.NewOption("Start with an empty box", "empty"), huh.NewOption("Edit a copy of the main caption", "copy"))
+			if compose.ThreadPlatform(a.Platform) && strings.TrimSpace(plan.Caption) != "" {
+				opts = append(opts, huh.NewOption("Split the main caption into a thread of replies", "thread"))
+			}
 			if limit > 0 && limit < 10000 && strings.TrimSpace(plan.Caption) != "" && p.aiReady(p.ctx) {
 				opts = append(opts, huh.NewOption(fmt.Sprintf("Let AI shorten the main caption to fit %s", compose.PlatformLabel[a.Platform]), "ai"))
 			}
@@ -1553,6 +1592,8 @@ func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
 				text = p.ownCaption[a.AccountID]
 			case "copy":
 				text = plan.Caption
+			case "thread":
+				text = compose.JoinParts(p.splitFor(a, plan.Caption))
 			case "ai":
 				short, err := p.aiShortenFor(p.ctx, a, limit)
 				if err != nil {
@@ -1566,19 +1607,40 @@ func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
 				if limit > 0 && limit < 10000 {
 					s += " · up to " + humanize.Comma(int64(limit))
 				}
+				if compose.ThreadPlatform(a.Platform) {
+					if _, parts := threadOf(a.Platform, text); len(parts) > 0 {
+						s = fmt.Sprintf("a thread: the post and %s", plural(len(parts), "reply"))
+					}
+					s += " · a line with --- starts the next reply"
+				}
 				return s + " · ctrl+e opens your editor"
 			}
 			if err := p.ask.form(huh.NewText().Title("Caption for "+accountLabel(a)).DescriptionFunc(count, &text).Value(&text).
-				Lines(6).CharLimit(63000).ExternalEditor(true).Validate(func(s string) error {
-				if n := p.finalLength(a.Platform, s); limit > 0 && n > limit {
+				Lines(8).CharLimit(63000).ExternalEditor(true).Validate(func(s string) error {
+				main, parts := threadOf(a.Platform, s)
+				if n := p.finalLength(a.Platform, main); limit > 0 && n > limit {
 					return fmt.Errorf("%s allows %s characters (now about %s)", compose.PlatformLabel[a.Platform], humanize.Comma(int64(limit)), humanize.Comma(int64(n)))
+				}
+				if len(parts) > compose.ThreadMaxParts {
+					return fmt.Errorf("a thread has at most %d replies", compose.ThreadMaxParts)
+				}
+				for i, part := range parts {
+					if n := compose.TextLength(a.Platform, part); limit > 0 && n > limit {
+						return fmt.Errorf("reply %d is %d characters; %s allows %d", i+1, n, compose.PlatformLabel[a.Platform], limit)
+					}
 				}
 				return nil
 			})); err != nil {
 				return err
 			}
 			p.ownCaption[a.AccountID] = text
-			plan.Captions[a.AccountID] = text
+			main, parts := threadOf(a.Platform, text)
+			plan.Captions[a.AccountID] = main
+			if len(parts) > 0 {
+				plan.Threads[a.AccountID] = parts
+			} else {
+				delete(plan.Threads, a.AccountID)
+			}
 			return nil
 		}},
 	}
@@ -2097,6 +2159,9 @@ func (p *poster) preview() string {
 			text = faint.Render("(no text)")
 		}
 		b.WriteString(text + "\n")
+		for i, part := range plan.Threads[a.AccountID] {
+			b.WriteString(faint.Render(fmt.Sprintf("↳ reply %d · %d characters", i+1, compose.TextLength(a.Platform, part))) + "\n" + part + "\n")
+		}
 		if fc := strings.TrimSpace(plan.FirstComment); fc != "" && compose.CommentsOn(a.Platform, plan.FormatFor(a)) {
 			b.WriteString(faint.Render("First comment: ") + fc + "\n")
 		}
@@ -2133,6 +2198,9 @@ func (p *poster) summary() string {
 			caption = "own caption"
 		}
 		extra := []string{plural(len(plan.FilesFor(a.AccountID)), "file"), caption}
+		if n := len(plan.Threads[a.AccountID]); n > 0 {
+			extra = append(extra, fmt.Sprintf("thread of %d", n+1))
+		}
 		if plan.AIFor(a.AccountID) && compose.AILabelSupported(a.Platform, plan.TikTok[a.AccountID].Draft) {
 			extra = append(extra, "AI label")
 		}
@@ -2488,6 +2556,10 @@ Texts (for every account)
   --hashtag-set A,B           add the hashtags of saved sets
   --link URL                  link preview on Facebook and Threads, the Pin's link
   --first-comment TEXT        Facebook Pages and Instagram
+  --alt FILE=TEXT             an image's alt text (for people who can't see it); repeatable
+  --alt-ai                    the AI writes alt text for the images without one (it looks at them)
+  --thread-for A,B            X / Threads accounts whose too-long caption becomes a thread of replies
+                              (or put a line with --- between the parts of an own caption)
   --title TEXT                YouTube, Pinterest and TikTok photo title
   --name TEXT                 internal name, only you see it (default: --title)
   --ai                        "made with AI" label wherever the platform has one
@@ -2537,4 +2609,15 @@ func filePath(dir, name string) string {
 		return name
 	}
 	return filepath.Join(dir, name)
+}
+
+// splitFor cuts text into a thread for the account (room left in the first post for the hashtags).
+func (p *poster) splitFor(a api.ProjectAccount, text string) []string {
+	limit := compose.MaxText(a.Platform, p.plan.FormatFor(a))
+	reserve := p.finalLength(a.Platform, "") + 2
+	return compose.SplitThread(a.Platform, text, limit, reserve)
+}
+
+func platformShortName(p string) string {
+	return map[string]string{"X": "x", "THREADS": "threads"}[p]
 }

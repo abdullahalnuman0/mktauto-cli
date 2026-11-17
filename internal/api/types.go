@@ -214,6 +214,7 @@ type PostInput struct {
 	Destinations  []DestinationInput `json:"destinations"`
 	Schedule      *Schedule          `json:"schedule,omitempty"`
 	Repeat        *Repeat            `json:"repeat,omitempty"`
+	AltTexts      map[string]string  `json:"altTexts,omitempty"` // asset id → alt text (ADR-080)
 }
 
 type Issue struct {
@@ -235,6 +236,9 @@ type Destination struct {
 	Status           string     `json:"status"`
 	PublishedURL     string     `json:"publishedUrl"`
 	PublishedAt      *time.Time `json:"publishedAt"`
+	ThreadStatus     string     `json:"threadStatus"` // POSTED, PARTIAL, FAILED (X, Threads; ADR-080)
+	ThreadPosted     *int       `json:"threadPosted"`
+	ThreadError      string     `json:"threadError"`
 	LastErrorMessage string     `json:"lastErrorMessage"`
 	Issues           []Issue    `json:"issues"`
 	Handoff          string     `json:"handoff"`
@@ -297,14 +301,14 @@ type NextSlot struct {
 }
 
 type TikTokCreatorInfo struct {
-	Nickname               string   `json:"nickname"`
-	Username               string   `json:"username"`
-	PrivacyLevelOptions    []string `json:"privacyLevelOptions"`
-	MaxVideoPostDurationSec int     `json:"maxVideoPostDurationSec"`
-	CommentDisabled        bool     `json:"commentDisabled"`
-	DuetDisabled           bool     `json:"duetDisabled"`
-	StitchDisabled         bool     `json:"stitchDisabled"`
-	Audited                bool     `json:"audited"`
+	Nickname                string   `json:"nickname"`
+	Username                string   `json:"username"`
+	PrivacyLevelOptions     []string `json:"privacyLevelOptions"`
+	MaxVideoPostDurationSec int      `json:"maxVideoPostDurationSec"`
+	CommentDisabled         bool     `json:"commentDisabled"`
+	DuetDisabled            bool     `json:"duetDisabled"`
+	StitchDisabled          bool     `json:"stitchDisabled"`
+	Audited                 bool     `json:"audited"`
 }
 
 type AIStatus struct {
@@ -408,4 +412,11 @@ type Notification struct {
 	Link          string     `json:"link"`
 	ReadAt        *time.Time `json:"readAt"`
 	CreatedAt     time.Time  `json:"createdAt"`
+}
+
+// AltTextResult: AI alt text for an image (POST /api/ai/alt-text).
+type AltTextResult struct {
+	AltText    string `json:"altText"`
+	UsedToday  int    `json:"usedToday"`
+	DailyLimit int    `json:"dailyLimit"`
 }

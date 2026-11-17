@@ -195,6 +195,9 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.json(w, 200, []map[string]any{{"id": "g1", "name": "Launch", "accountIds": []string{"acc-ig", "acc-tt"}}})
 	case path == "/api/ai/status":
 		f.json(w, 200, map[string]any{"enabled": true, "model": "test", "usedToday": 1, "dailyLimit": 20})
+	case path == "/api/ai/alt-text":
+		f.aiCalls = append(f.aiCalls, body)
+		f.json(w, 200, map[string]any{"altText": "A phone showing the app", "usedToday": 3, "dailyLimit": 20})
 	case path == "/api/ai/caption":
 		f.aiCalls = append(f.aiCalls, body)
 		f.json(w, 200, map[string]any{"suggestions": []string{"Short one", "Another"}, "hashtags": []string{"apps"}, "usedToday": 2, "dailyLimit": 20})

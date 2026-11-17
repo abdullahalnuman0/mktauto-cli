@@ -255,6 +255,11 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 				"youtube_privacy": str("public, unlisted or private"), "when": str("draft, next-slot, YYYY-MM-DD HH:MM or now"),
 				"repeat": str("daily, weekly, biweekly, monthly or N days (with a time)"), "duplicates": str("files posted before: new-only (default), post or skip"),
 				"dry_run": boolean("check and preview only"),
+				"alt_texts": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"},
+					"description": "an image's alt text, by file path or name: {\"shot.png\": \"…\"}"},
+				"alt_ai": boolean("let the AI write alt text for images that have none"),
+				"threads": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"description": "X / Threads: a thread, by account: {\"x\": [\"the post\", \"reply 1\", …]} (the first part replaces that account's caption)"},
 			}, "project", "accounts"),
 			Annotations: write, level: 1,
 			run: func(ctx context.Context, a map[string]any) (any, error) {
@@ -293,6 +298,23 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 				}
 				if mcpBool(a, "made_with_ai") {
 					args = append(args, "--ai")
+				}
+				if alts, ok := a["alt_texts"].(map[string]any); ok {
+					for file, v := range alts {
+						if s, ok := v.(string); ok {
+							args = append(args, "--alt", file+"="+s)
+						}
+					}
+				}
+				if mcpBool(a, "alt_ai") {
+					args = append(args, "--alt-ai")
+				}
+				if threads, ok := a["threads"].(map[string]any); ok {
+					for acc, v := range threads {
+						if parts := listArg(map[string]any{"p": v}, "p"); len(parts) > 0 {
+							args = append(args, "--caption-for", acc+"="+compose.JoinParts(parts))
+						}
+					}
 				}
 				if mcpBool(a, "dry_run") {
 					args = append(args, "--dry-run")
