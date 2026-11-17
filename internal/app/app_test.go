@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/abdullahalnuman0/mktauto-cli/internal/history"
+	"github.com/abdullahalnuman0/mktauto-cli/internal/update"
 )
 
 // fakeServer answers like the MKTAuto API (backend CliController, MediaController, PostController) and records calls.
@@ -192,6 +193,7 @@ func setup(t *testing.T) (*fakeServer, string) {
 	t.Setenv("MKTAUTO_NO_TUI", "1")
 	t.Setenv("MKTAUTO_NO_BROWSER", "1")
 	t.Setenv("MKTAUTO_TOKEN", "")
+	t.Setenv("MKTAUTO_NO_UPDATE_CHECK", "1") // tests never ask GitHub
 	f := newFakeServer(t)
 	t.Setenv("MKTAUTO_SERVER", f.srv.URL)
 	dir := t.TempDir()
@@ -339,3 +341,31 @@ func TestPublishNowWaitsForTheResultAndARevokedSessionIsForgotten(t *testing.T) 
 		t.Errorf("the revoked token is forgotten: %d %s", code, out)
 	}
 }
+
+func TestUpdateNoticeAndCheck(t *testing.T) {
+	_, dir := setup(t)
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/releases/latest" {
+			fmt.Fprint(w, `{"tag_name":"v9.0.0"}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer gh.Close()
+	old := releases
+	releases = func() *update.Source { return &update.Source{API: gh.URL + "/api", Download: gh.URL + "/dl", HTTP: gh.Client()} }
+	defer func() { releases = old }()
+	t.Setenv("MKTAUTO_NO_UPDATE_CHECK", "")
+	if code, out := runCLI(t, dir, "history"); code != 0 || !strings.Contains(out, "mktauto v9.0.0 is available") {
+		t.Errorf("daily notice: %d %s", code, out)
+	}
+	if code, out := runCLI(t, dir, "update", "--check"); code != 0 || !strings.Contains(out, "v9.0.0 is available (you have 1.0.0-test)") {
+		t.Errorf("update --check: %d %s", code, out)
+	}
+	// Checked within the day: the saved answer is used (the server isn't asked again).
+	gh.Close()
+	if code, out := runCLI(t, dir, "history"); code != 0 || !strings.Contains(out, "v9.0.0 is available") {
+		t.Errorf("cached notice: %d %s", code, out)
+	}
+}
+

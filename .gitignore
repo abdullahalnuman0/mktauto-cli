@@ -3,3 +3,4 @@
 /mktauto.exe
 *.test
 coverage.out
+build/

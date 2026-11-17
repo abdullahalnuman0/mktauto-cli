@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/auth"
+	"github.com/abdullahalnuman0/mktauto-cli/internal/update"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
@@ -54,6 +56,7 @@ Usage:
   mktauto history [--all] what was posted from this folder
   mktauto open [post]     open the website (or a post) in the browser
   mktauto doctor          check the connection and this installation
+  mktauto update          install the latest version (--version vX.Y.Z for another one)
   mktauto version
 
 Global: --server URL (or MKTAUTO_SERVER) to use another MKTAuto server.
@@ -85,7 +88,23 @@ func Run(args []string, version string) int {
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
 	}
+	if exe, err := os.Executable(); err == nil {
+		update.Cleanup(exe) // the program a Windows update left behind
+	}
+	var notice <-chan string
+	if cmd != "update" && cmd != "version" && cmd != "--version" && cmd != "-v" && cmd != "help" && cmd != "-h" && cmd != "--help" {
+		notice = env.noticeUpdate(ctx)
+	}
 	err = env.dispatch(ctx, cmd, args)
+	if notice != nil {
+		select {
+		case n, ok := <-notice:
+			if ok && n != "" {
+				fmt.Fprintln(env.Err, yellow.Render("↑ ")+n)
+			}
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 	switch {
 	case err == nil:
 		return 0
@@ -137,6 +156,8 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.open(ctx, args)
 	case "doctor":
 		return e.doctor(ctx)
+	case "update":
+		return e.update(ctx, args)
 	case "version", "--version", "-v":
 		fmt.Fprintln(e.Out, "mktauto", e.Version)
 		return nil

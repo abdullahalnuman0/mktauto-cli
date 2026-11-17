@@ -6,6 +6,27 @@ a draft, schedule it or publish now. It warns you when a file was already posted
 
 Windows, macOS and Linux. Downloads and install commands: **https://mktauto.site/download**
 
+## Install
+
+```sh
+# Linux and macOS
+curl -fsSL https://mktauto.site/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://mktauto.site/install.ps1 | iex
+```
+
+Both download from [GitHub Releases](https://github.com/abdullahalnuman0/mktauto-cli/releases), check the SHA-256 against
+the release's `checksums.txt` and install for your user. Or download a file from the releases page yourself.
+Update later with `mktauto update` (it also tells you once a day when a new version is out;
+`MKTAUTO_NO_UPDATE_CHECK=1` turns that off).
+
+The programs are not code-signed yet: Windows SmartScreen or macOS Gatekeeper may warn about a file downloaded in a
+browser (Windows: More info → Run anyway; macOS: System Settings → Privacy & Security → Open Anyway). Check the
+checksum first. Company-managed computers may block unsigned programs.
+
 ## Use
 
 ```sh
@@ -54,3 +75,12 @@ when: next-slot   # draft, now, next-slot or "2026-12-01 18:30"
 go test ./...
 go build -ldflags "-X main.version=dev" -o mktauto ./cmd/mktauto
 ```
+
+## Release
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+GitHub Actions runs the tests, builds Windows, macOS and Linux (x64 and ARM64), writes `checksums.txt` and publishes
+the release (a tag with a `-`, e.g. `v1.3.0-beta.1`, becomes a pre-release). Earlier releases stay.

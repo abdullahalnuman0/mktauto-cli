@@ -24,6 +24,7 @@ jobs:
       - run: go test -race ./...
         env:
           MKTAUTO_TOKEN_STORE: file
+          MKTAUTO_NO_UPDATE_CHECK: "1"
       - name: Build every release target
         if: matrix.os == 'ubuntu-latest'
         shell: bash
