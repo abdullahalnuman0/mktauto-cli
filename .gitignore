@@ -1,0 +1,5 @@
+/dist/
+/mktauto
+/mktauto.exe
+*.test
+coverage.out

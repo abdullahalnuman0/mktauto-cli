@@ -1,0 +1,56 @@
+# mktauto
+
+Post to your [MKTAuto](https://mktauto.site) accounts from a folder on your computer: choose the project, the accounts
+and the files (in your order, and which file goes to which account), add the caption, link and first comment, then save
+a draft, schedule it or publish now. It warns you when a file was already posted.
+
+Windows, macOS and Linux. Downloads and install commands: **https://mktauto.site/download**
+
+## Use
+
+```sh
+mktauto login            # approve this computer in the browser (or: mktauto login --code mkl_…)
+cd ~/Pictures/launch     # a folder with images or videos
+mktauto                  # menu → "Post from this folder"
+```
+
+Everything can also run without questions, e.g. from a script:
+
+```sh
+mktauto post --project Memoshot --accounts facebook,instagram,tiktok \
+  --files cover.png,shot1.png,shot2.png --only tiktok=1 \
+  --caption-file caption.txt --hashtags android,kotlin --first-comment "Download: https://…" \
+  --tiktok-privacy SELF_ONLY --when "2026-12-01 18:30"
+```
+
+`mktauto post -h` lists every flag. Other commands: `status`, `retry`, `history`, `open`, `whoami`, `logout`, `doctor`.
+
+### Folder helpers
+
+- `reel.txt` next to `reel.mp4` (or `caption.txt` in the folder) fills in the caption.
+- `mktauto.yml` holds defaults for the folder:
+
+```yaml
+project: Memoshot
+accounts: [instagram, tiktok]
+hashtags: [android, productivity]
+madeWithAI: false
+when: next-slot   # draft, now, next-slot or "2026-12-01 18:30"
+```
+
+## Security
+
+- The tool contains no passwords or keys. `mktauto login` creates a terminal session that you can see and revoke on the
+  website (Settings → Terminal access); it can be limited to drafts, some projects or a number of posts a day.
+- The session token is kept in the system keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service),
+  or in a file only your user can read when there is no keychain (`mktauto doctor` says which).
+- Files go straight to storage over HTTPS; social media passwords and platform tokens never reach your computer.
+- Environment: `MKTAUTO_SERVER` (another MKTAuto server), `MKTAUTO_TOKEN` (a session token for CI),
+  `MKTAUTO_CONFIG_DIR`, `MKTAUTO_TOKEN_STORE=file`, `MKTAUTO_NO_BROWSER=1`.
+
+## Develop
+
+```sh
+go test ./...
+go build -ldflags "-X main.version=dev" -o mktauto ./cmd/mktauto
+```
