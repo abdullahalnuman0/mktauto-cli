@@ -28,18 +28,46 @@ const Repo = "abdullahalnuman0/mktauto-cli"
 
 // Source is where releases are read from (tests point it at a fake server).
 type Source struct {
+	Web      string // https://github.com/<repo>
 	API      string // https://api.github.com/repos/<repo>
 	Download string // https://github.com/<repo>/releases/download
 	HTTP     *http.Client
 }
 
 func GitHub() *Source {
-	return &Source{API: "https://api.github.com/repos/" + Repo, Download: "https://github.com/" + Repo + "/releases/download",
+	return &Source{Web: "https://github.com/" + Repo, API: "https://api.github.com/repos/" + Repo, Download: "https://github.com/" + Repo + "/releases/download",
 		HTTP: &http.Client{Timeout: 5 * time.Minute}}
 }
 
-// Latest is the newest non-pre-release version tag, e.g. "v1.2.0".
+// Latest is the newest non-pre-release version tag, e.g. "v1.2.0". It reads where github.com/<repo>/releases/latest
+// redirects to (no rate limit), and asks GitHub's API (60 requests an hour per IP without a token) only if that fails.
 func (s *Source) Latest(ctx context.Context) (string, error) {
+	if s.Web != "" {
+		if tag, err := s.latestFromRedirect(ctx); err == nil {
+			return tag, nil
+		}
+	}
+	return s.latestFromAPI(ctx)
+}
+
+func (s *Source) latestFromRedirect(ctx context.Context) (string, error) {
+	client := *s.HTTP
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, s.Web+"/releases/latest", nil)
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	res.Body.Close()
+	loc := res.Header.Get("Location")
+	_, tag, ok := strings.Cut(loc, "/releases/tag/")
+	if res.StatusCode/100 != 3 || !ok || tag == "" || strings.Contains(tag, "/") {
+		return "", fmt.Errorf("no latest release (HTTP %d)", res.StatusCode)
+	}
+	return tag, nil
+}
+
+func (s *Source) latestFromAPI(ctx context.Context) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.API+"/releases/latest", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	res, err := s.HTTP.Do(req)
@@ -49,6 +77,9 @@ func (s *Source) Latest(ctx context.Context) (string, error) {
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
 		return "", errors.New("no release is published yet")
+	}
+	if res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests {
+		return "", errors.New("GitHub's limit for this network was reached: try again in an hour")
 	}
 	if res.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("GitHub answered HTTP %d", res.StatusCode)

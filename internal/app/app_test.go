@@ -353,7 +353,7 @@ func TestUpdateNoticeAndCheck(t *testing.T) {
 	}))
 	defer gh.Close()
 	old := releases
-	releases = func() *update.Source { return &update.Source{API: gh.URL + "/api", Download: gh.URL + "/dl", HTTP: gh.Client()} }
+	releases = func() *update.Source { return &update.Source{Web: gh.URL + "/web", API: gh.URL + "/api", Download: gh.URL + "/dl", HTTP: gh.Client()} }
 	defer func() { releases = old }()
 	t.Setenv("MKTAUTO_NO_UPDATE_CHECK", "")
 	if code, out := runCLI(t, dir, "history"); code != 0 || !strings.Contains(out, "mktauto v9.0.0 is available") {

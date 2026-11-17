@@ -61,9 +61,13 @@ func TestFetchChecksTheDownloadAndUpdatesTheProgram(t *testing.T) {
 	linux := tarGz("mktauto", program)
 	windows := zipOf("mktauto.exe", program)
 	tampered := false
+	apiCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/web/releases/latest": // what github.com does: redirect to the tag page
+			http.Redirect(w, r, "/web/releases/tag/v1.2.0", http.StatusFound)
 		case "/api/releases/latest":
+			apiCalls++
 			fmt.Fprint(w, `{"tag_name":"v1.2.0"}`)
 		case "/dl/v1.2.0/checksums.txt":
 			fmt.Fprintf(w, "%s  mktauto_1.2.0_linux_amd64.tar.gz\n%s  mktauto_1.2.0_windows_arm64.zip\n", sum(linux), sum(windows))
@@ -80,10 +84,14 @@ func TestFetchChecksTheDownloadAndUpdatesTheProgram(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	s := &Source{API: srv.URL + "/api", Download: srv.URL + "/dl", HTTP: srv.Client()}
+	s := &Source{Web: srv.URL + "/web", API: srv.URL + "/api", Download: srv.URL + "/dl", HTTP: srv.Client()}
 	ctx := context.Background()
-	if tag, err := s.Latest(ctx); err != nil || tag != "v1.2.0" {
-		t.Fatalf("latest: %q %v", tag, err)
+	if tag, err := s.Latest(ctx); err != nil || tag != "v1.2.0" || apiCalls != 0 {
+		t.Fatalf("latest from the redirect, without the rate-limited API: %q %v (api calls %d)", tag, err, apiCalls)
+	}
+	noWeb := &Source{Web: srv.URL + "/missing", API: srv.URL + "/api", Download: srv.URL + "/dl", HTTP: srv.Client()}
+	if tag, err := noWeb.Latest(ctx); err != nil || tag != "v1.2.0" || apiCalls != 1 {
+		t.Fatalf("falls back to the API: %q %v", tag, err)
 	}
 	got, err := s.Fetch(ctx, "v1.2.0", "linux", "amd64")
 	if err != nil || !bytes.Equal(got, program) {
