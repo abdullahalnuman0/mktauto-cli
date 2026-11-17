@@ -58,11 +58,12 @@ func (e *Env) menu(ctx context.Context) error {
 	files, _ := media.Scan(e.Dir)
 	for {
 		choice := "post"
-		postLabel := fmt.Sprintf("Post from this folder (%s)", plural(len(files), "file"))
+		images, videos := countKinds(files)
+		postLabel := fmt.Sprintf("Post from this folder (%s, %s)", plural(images, "image"), plural(videos, "video"))
 		if len(files) == 0 {
 			postLabel = "Post (no images or videos in this folder: text only)"
 		}
-		err := huh.NewSelect[string]().Title("mktauto · " + shortPath(e.Dir)).Options(
+		err := huh.NewSelect[string]().Title("mktauto · "+shortPath(e.Dir)).Options(
 			huh.NewOption(postLabel, "post"),
 			huh.NewOption("Status of recent posts", "status"),
 			huh.NewOption("What was posted from this folder", "history"),
@@ -85,7 +86,11 @@ func (e *Env) menu(ctx context.Context) error {
 		case "logout":
 			return e.logout(ctx)
 		}
-		if err != nil && !errors.Is(err, errSilent) {
+		switch {
+		case errors.Is(err, errBack): // Esc on the first question: back to this menu
+		case errors.Is(err, huh.ErrUserAborted):
+			e.printf("%s\n", faint.Render("Cancelled: nothing was saved."))
+		case err != nil && !errors.Is(err, errSilent):
 			fmt.Fprintln(e.Err, red.Render("✗ ")+err.Error())
 		}
 		if errors.Is(err, context.Canceled) {

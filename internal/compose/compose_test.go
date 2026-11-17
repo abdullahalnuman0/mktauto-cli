@@ -176,3 +176,32 @@ func TestTimesTagsAndAccountMatching(t *testing.T) {
 		t.Error("no Pinterest account here")
 	}
 }
+
+func TestFitAndTextLimits(t *testing.T) {
+	img := api.Media{Kind: "IMAGE", Width: 1080, Height: 1350}
+	five := []api.Media{img, img, img, img, img}
+	if f, why := Fit("X", five); f != "" || why != "X takes up to 4 files" {
+		t.Errorf("X with 5 images: %q %q", f, why)
+	}
+	if f, _ := Fit("INSTAGRAM", five); f != "CAROUSEL" {
+		t.Errorf("Instagram with 5 images: %q", f)
+	}
+	if f, why := Fit("PINTEREST", five[:2]); f != "" || why == "" {
+		t.Errorf("Pinterest takes one file: %q %q", f, why)
+	}
+	if f, why := Fit("TIKTOK", nil); f != "" || why != "TikTok needs a photo or video" {
+		t.Errorf("TikTok text: %q %q", f, why)
+	}
+	if MaxText("X", "TEXT") != 280 || MaxText("INSTAGRAM", "REEL") != 2200 || MaxText("YOUTUBE", "NOPE") != 0 {
+		t.Error("limits")
+	}
+	if n := TextLength("X", "héllo 👋"); n != 7 {
+		t.Errorf("code points: %d", n)
+	}
+	if n := TextLength("THREADS", "hi 👋"); n != 7 {
+		t.Errorf("Threads counts emoji bytes: %d", n)
+	}
+	if n := TextLength("X", "go https://mktauto.site/l/AbC2345 now"); n != 39 {
+		t.Errorf("tracked link gains 2: %d", n)
+	}
+}

@@ -104,8 +104,8 @@ func (p *Plan) Problems() []string {
 	for _, a := range p.Accounts {
 		name := a.DisplayName + " (" + PlatformLabel[a.Platform] + ")"
 		files := mediaOf(p.FilesFor(a.AccountID))
-		if AutoFormat(a.Platform, files) == "" {
-			out = append(out, name+": "+CantPostReason(a.Platform, files))
+		if _, why := Fit(a.Platform, files); why != "" {
+			out = append(out, name+": "+why)
 		}
 		if a.Platform == "YOUTUBE" && strings.TrimSpace(p.titleFor(a.AccountID)) == "" {
 			out = append(out, name+": YouTube needs a title")

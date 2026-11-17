@@ -15,6 +15,7 @@ import (
 	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/auth"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/update"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
@@ -115,6 +116,9 @@ func Run(args []string, version string) int {
 		return 130
 	case errors.Is(err, errSilent):
 		return 1
+	case errors.Is(err, errBack), errors.Is(err, huh.ErrUserAborted):
+		fmt.Fprintln(env.Err, faint.Render("Cancelled: nothing was saved."))
+		return 130
 	}
 	fmt.Fprintln(env.Err, red.Render("✗ ")+err.Error())
 	return 1

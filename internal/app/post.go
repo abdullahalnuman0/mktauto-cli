@@ -30,19 +30,19 @@ func (m *multiFlag) String() string     { return strings.Join(*m, ";") }
 func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 type postFlags struct {
-	project, accounts, files                         string
-	only                                             multiFlag
-	caption, captionFile, hashtags, link, firstComm  string
-	title                                            string
-	ai                                               bool
-	aiOff                                            string
-	tiktokPrivacy, tiktokAllow                       string
-	tiktokDraft                                      bool
-	youtubePrivacy, board                            string
-	cover                                            string
-	coverFrame                                       float64
-	when, duplicates                                 string
-	dryRun, jsonOut, yes, wait                       bool
+	project, accounts, files                        string
+	only                                            multiFlag
+	caption, captionFile, hashtags, link, firstComm string
+	title                                           string
+	ai                                              bool
+	aiOff                                           string
+	tiktokPrivacy, tiktokAllow                      string
+	tiktokDraft                                     bool
+	youtubePrivacy, board                           string
+	cover                                           string
+	coverFrame                                      float64
+	when, duplicates                                string
+	dryRun, jsonOut, yes, wait                      bool
 }
 
 // post: the wizard when run in a terminal without flags, otherwise everything from flags (scripts, CI).
@@ -69,7 +69,7 @@ func (e *Env) post(ctx context.Context, args []string) error {
 	fs.StringVar(&f.board, "board", "", "Pinterest board id (empty = the account's default board)")
 	fs.StringVar(&f.cover, "cover", "", "image file in this folder used as the video's cover")
 	fs.Float64Var(&f.coverFrame, "cover-frame", 0, "second of the video used as its cover where an image isn't possible")
-	fs.StringVar(&f.when, "when", "draft", "draft, now, next-slot, or \"YYYY-MM-DD HH:MM\" in the project's timezone")
+	fs.StringVar(&f.when, "when", "", "draft (default), now, next-slot, or \"YYYY-MM-DD HH:MM\" in the project's timezone")
 	fs.StringVar(&f.duplicates, "duplicates", "", "files that were posted before: post (anyway), new-only (only accounts that haven't had them), skip")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "check everything and print the post that would be sent, without uploading or saving")
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
@@ -82,21 +82,57 @@ func (e *Env) post(ctx context.Context, args []string) error {
 	if f.jsonOut {
 		e.Out = e.Err
 	}
-	p := &poster{env: e, f: f, wizard: !flagMode}
+	p := &poster{env: e, f: f, wizard: !flagMode, ask: newAsker()}
 	return p.run(ctx)
 }
+
+// Content types the wizard offers first; the files and the accounts that can post them follow from it.
+const (
+	kindText   = "text"
+	kindImages = "images"
+	kindVideo  = "video"
+	kindMixed  = "mixed"
+)
 
 type poster struct {
 	env    *Env
 	f      postFlags
 	wizard bool
+	ask    *asker
 	c      *api.Client
 	me     *api.Me
 	plan   *compose.Plan
-	files  []media.File        // chosen, in order
-	cover  *media.File         // cover image (not posted as media)
-	dups   map[string]api.Duplicate
-	tiktok map[string]*api.TikTokCreatorInfo
+
+	defaults *media.Defaults
+	all      []media.File         // postable files in the folder
+	posted   map[string]string    // file name → "posted" / "draft" (this folder's history)
+	projAcc  []api.ProjectAccount // the project's accounts
+	accFor   string               // project id projAcc belongs to
+
+	// Each step's own choices; kept when the user goes back so the questions show them again.
+	kind        string
+	picked      []media.File         // chosen files, in the post's order
+	listDraft   []media.File         // ticked in the file list (in order), before the order screen
+	chosen      []api.ProjectAccount // ticked accounts
+	files       []media.File         // picked minus files left out as duplicates
+	dups        map[string]api.Duplicate
+	dupChoice   map[string]string // sha256 → post / new-only / skip
+	cover       *media.File       // cover image (not posted as media)
+	coverChoice string            // none / frame / image
+	coverSecond string
+	coverImage  string               // path
+	uploaded    map[string]api.Media // path → stored media (not uploaded twice)
+	textsSet    bool
+	captionFrom string // file whose sidecar caption filled the caption
+	hashtags    string
+	ownCaption  map[string]string // accountId → its own caption (kept even when unticked)
+	captionMode string            // same / own
+	captionIDs  []string          // accounts with their own caption
+	captionHow  map[string]string // accountId → keep / edit / empty / copy
+	whenChoice  string
+	whenAt      string
+	tiktok      map[string]*api.TikTokCreatorInfo
+	aiOffIDs    []string // accounts the AI label was turned off for
 }
 
 func (p *poster) run(ctx context.Context) error {
@@ -108,55 +144,60 @@ func (p *poster) run(ctx context.Context) error {
 	if p.me, err = e.me(ctx, p.c); err != nil {
 		return err
 	}
-	defaults, err := media.LoadDefaults(e.Dir)
-	if err != nil {
+	if p.defaults, err = media.LoadDefaults(e.Dir); err != nil {
 		return fmt.Errorf("mktauto.yml: %w", err)
 	}
-	all, err := media.Scan(e.Dir)
-	if err != nil {
+	if p.all, err = media.Scan(e.Dir); err != nil {
 		return err
 	}
 	p.plan = compose.NewPlan()
 	p.tiktok = map[string]*api.TikTokCreatorInfo{}
+	p.dups, p.dupChoice, p.uploaded, p.ownCaption = map[string]api.Duplicate{}, map[string]string{}, map[string]api.Media{}, map[string]string{}
+	p.captionHow = map[string]string{}
+	p.posted = postedHere(e.Dir)
 
-	if err := p.chooseProject(ctx, defaults); err != nil {
-		return err
+	steps := []step{
+		{"project", func() error { return p.chooseProject(ctx) }},
+		{"", func() error { return p.loadAccounts(ctx) }},
+		{"content", p.chooseKind},
+		{"files", p.chooseFiles},
+		{"accounts", p.chooseAccounts},
+		{"", func() error { return p.checkDuplicates(ctx) }},
+		{"cover", p.chooseCover},
+		{"", func() error { return p.uploadFiles(ctx) }},
+		{"per account", p.choosePerAccount},
+		{"texts", p.details},
+		{"captions", p.captionsPerAccount},
+		{"ai", p.aiPerAccount},
+		{"platforms", func() error { return p.platformSettings(ctx) }},
+		{"when", func() error { return p.chooseWhen(ctx) }},
+		{"review", p.confirm},
 	}
-	accounts, err := p.c.ProjectAccounts(ctx, p.plan.Project.ID)
-	if err != nil {
-		return err
-	}
-	slices.SortFunc(accounts, func(a, b api.ProjectAccount) int { return a.SortOrder - b.SortOrder })
-	if err := p.chooseAccounts(accounts, defaults); err != nil {
-		return err
-	}
-	if err := p.chooseFiles(all); err != nil {
-		return err
-	}
-	if err := p.checkDuplicates(ctx); err != nil {
-		return err
-	}
-	if err := p.chooseCover(all); err != nil {
-		return err
-	}
-	if err := p.uploadFiles(ctx); err != nil {
-		return err
-	}
-	if err := p.choosePerAccount(); err != nil {
-		return err
-	}
-	if err := p.details(ctx, defaults); err != nil {
-		return err
-	}
-	if err := p.chooseWhen(ctx, defaults); err != nil {
+	if err := runSteps(p.ask, steps, false); err != nil {
 		return err
 	}
 	return p.saveAndAct(ctx)
 }
 
-// ------------------------------------------------------------------ project, accounts, files
+// postedHere: files posted (or saved as drafts) from this folder before, by name.
+func postedHere(dir string) map[string]string {
+	out := map[string]string{}
+	entries, _ := history.For(dir)
+	for _, en := range entries {
+		for _, f := range en.Files {
+			if en.Action != "draft" {
+				out[f.Name] = "posted"
+			} else if out[f.Name] == "" {
+				out[f.Name] = "draft"
+			}
+		}
+	}
+	return out
+}
 
-func (p *poster) chooseProject(ctx context.Context, d *media.Defaults) error {
+// ------------------------------------------------------------------ project, content, files, accounts
+
+func (p *poster) chooseProject(ctx context.Context) error {
 	projects, err := p.c.Projects(ctx)
 	if err != nil {
 		return err
@@ -170,10 +211,7 @@ func (p *poster) chooseProject(ctx context.Context, d *media.Defaults) error {
 	if len(live) == 0 {
 		return errors.New("no projects available to this terminal: create one on the website")
 	}
-	want := p.f.project
-	if want == "" {
-		want = d.Project
-	}
+	want := firstNonEmpty(p.f.project, p.defaults.Project)
 	if want == "" && !p.wizard && len(live) == 1 {
 		want = live[0].ID
 	}
@@ -194,24 +232,45 @@ func (p *poster) chooseProject(ctx context.Context, d *media.Defaults) error {
 		return nil
 	}
 	chosen := ""
-	if pr := find(want); pr != nil {
-		chosen = pr.ID
-	} else if last := p.env.Config.LastProject[p.env.Dir]; find(last) != nil {
-		chosen = last
+	switch {
+	case p.plan.Project.ID != "" && find(p.plan.Project.ID) != nil: // came back to this question
+		chosen = p.plan.Project.ID
+	case find(want) != nil:
+		chosen = find(want).ID
+	case find(p.env.Config.LastProject[p.env.Dir]) != nil:
+		chosen = p.env.Config.LastProject[p.env.Dir]
 	}
 	if len(live) == 1 {
-		chosen = live[0].ID
-		p.env.printf("Project: %s\n", bold.Render(live[0].Name))
-	} else {
-		opts := make([]huh.Option[string], len(live))
-		for i, pr := range live {
-			opts[i] = huh.NewOption(pr.Name, pr.ID)
+		if p.plan.Project.ID == "" {
+			p.env.printf("Project: %s\n", bold.Render(live[0].Name))
 		}
-		if err := huh.NewSelect[string]().Title("Project").Options(opts...).Value(&chosen).Run(); err != nil {
-			return err
-		}
+		p.plan.Project = live[0]
+		return nil
+	}
+	opts := make([]huh.Option[string], len(live))
+	for i, pr := range live {
+		opts[i] = huh.NewOption(pr.Name, pr.ID)
+	}
+	if err := p.ask.form(huh.NewSelect[string]().Title("Project").Options(opts...).Value(&chosen)); err != nil {
+		return err
 	}
 	p.plan.Project = *find(chosen)
+	return nil
+}
+
+func (p *poster) loadAccounts(ctx context.Context) error {
+	if p.accFor == p.plan.Project.ID {
+		return nil
+	}
+	accounts, err := p.c.ProjectAccounts(ctx, p.plan.Project.ID)
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(accounts, func(a, b api.ProjectAccount) int { return a.SortOrder - b.SortOrder })
+	if len(accounts) == 0 {
+		return errors.New("this project has no accounts: link some on the website (Projects)")
+	}
+	p.projAcc, p.accFor, p.chosen = accounts, p.plan.Project.ID, nil
 	return nil
 }
 
@@ -234,14 +293,211 @@ func accountLabel(a api.ProjectAccount) string {
 	return s
 }
 
-func (p *poster) chooseAccounts(accounts []api.ProjectAccount, d *media.Defaults) error {
-	if len(accounts) == 0 {
-		return errors.New("this project has no accounts: link some on the website (Projects)")
+func countKinds(files []media.File) (images, videos int) {
+	for _, f := range files {
+		if f.IsVideo() {
+			videos++
+		} else {
+			images++
+		}
 	}
+	return
+}
+
+// chooseKind: what is being posted. It narrows the file list and preselects the accounts that can post it.
+func (p *poster) chooseKind() error {
+	if !p.wizard {
+		return nil
+	}
+	images, videos := countKinds(p.all)
+	if images+videos == 0 {
+		if p.kind == "" {
+			p.env.printf("%s\n", faint.Render("No images or videos in this folder: this will be a text post."))
+		}
+		p.kind = kindText
+		return nil
+	}
+	var opts []huh.Option[string]
+	if images > 0 {
+		opts = append(opts, huh.NewOption(fmt.Sprintf("Images · one photo or a carousel  (%d here)", images), kindImages))
+	}
+	if videos > 0 {
+		opts = append(opts, huh.NewOption(fmt.Sprintf("Video · Reel, Short, TikTok, YouTube  (%d here)", videos), kindVideo))
+	}
+	if images > 0 && videos > 0 || videos > 1 {
+		opts = append(opts, huh.NewOption("Images and videos together · a mixed carousel", kindMixed))
+	}
+	opts = append(opts, huh.NewOption("Text only · no files", kindText))
+	if p.kind == "" {
+		p.kind = opts[0].Value
+	}
+	desc := fmt.Sprintf("This folder: %s, %s", plural(images, "image"), plural(videos, "video"))
+	if n := len(p.posted); n > 0 {
+		desc += fmt.Sprintf(" · %d used before from here", min(n, len(p.all)))
+	}
+	return p.ask.form(huh.NewSelect[string]().Title("What are you posting?").Description(desc).Options(opts...).Value(&p.kind))
+}
+
+func (p *poster) fileLabel(f media.File) string {
+	s := f.Name + "  " + faint.Render(humanize.Bytes(uint64(f.Size)))
+	if f.Width > 0 {
+		s += faint.Render(fmt.Sprintf(" · %d×%d", f.Width, f.Height))
+	}
+	switch p.posted[f.Name] {
+	case "posted":
+		s += yellow.Render(" · posted before")
+	case "draft":
+		s += faint.Render(" · in a draft")
+	}
+	return s
+}
+
+func (p *poster) chooseFiles() error {
+	if !p.wizard {
+		p.picked = nil
+		spec := strings.TrimSpace(p.f.files)
+		switch spec {
+		case "":
+			return nil // text only
+		case "all":
+			p.picked = slices.Clone(p.all)
+			return nil
+		}
+		for _, name := range splitList(spec) {
+			f, ok := media.Describe(filepath.Join(p.env.Dir, name))
+			if !ok {
+				return fmt.Errorf("%s: not found, or not an image/video MKTAuto accepts (JPEG, PNG, WebP, GIF, MP4, MOV, WebM)", name)
+			}
+			p.picked = append(p.picked, f)
+		}
+		return nil
+	}
+	var pool []media.File
+	for _, f := range p.all {
+		if p.kind == kindMixed || (p.kind == kindVideo) == f.IsVideo() {
+			pool = append(pool, f)
+		}
+	}
+	// What was picked before (when coming back) and is still in this list.
+	var prev []media.File
+	for _, f := range p.picked {
+		if slices.ContainsFunc(pool, func(x media.File) bool { return x.Path == f.Path }) {
+			prev = append(prev, f)
+		}
+	}
+	switch {
+	case p.kind == kindText:
+		p.picked = nil
+		return nil
+	case p.kind == kindVideo:
+		if len(pool) == 1 {
+			p.picked = pool
+			p.env.printf("Video: %s\n", bold.Render(pool[0].Name))
+			return nil
+		}
+		pick := 0
+		if len(prev) > 0 {
+			pick = slices.IndexFunc(pool, func(x media.File) bool { return x.Path == prev[0].Path })
+		} else if i := slices.IndexFunc(pool, func(x media.File) bool { return p.posted[x.Name] != "posted" }); i >= 0 {
+			pick = i
+		}
+		opts := make([]huh.Option[int], len(pool))
+		for i, f := range pool {
+			opts[i] = huh.NewOption(p.fileLabel(f), i)
+		}
+		if err := p.ask.form(huh.NewSelect[int]().Title("Which video").Description("one video per post · run mktauto again for the next one").
+			Options(opts...).Value(&pick).Height(min(len(pool)+2, 16))); err != nil {
+			return err
+		}
+		p.picked = []media.File{pool[pick]}
+		return nil
+	}
+	// Two questions: which files, then their order (Esc on the order goes back to the list).
+	minFiles, title := 1, "Images"
+	if p.kind == kindMixed {
+		minFiles, title = 2, "Images and videos"
+	}
+	if p.listDraft == nil {
+		p.listDraft = prev
+	}
+	return runSteps(p.ask, []step{
+		{run: func() error {
+			var ids []int
+			opts := make([]huh.Option[int], len(pool))
+			for i, f := range pool {
+				sel := slices.ContainsFunc(p.listDraft, func(x media.File) bool { return x.Path == f.Path })
+				if len(p.listDraft) == 0 && p.picked == nil {
+					sel = len(pool) <= 10 && p.posted[f.Name] != "posted" // first time: every new file, in a small folder
+				}
+				if sel {
+					ids = append(ids, i)
+				}
+				opts[i] = huh.NewOption(p.fileLabel(f), i).Selected(sel)
+			}
+			if err := p.ask.form(huh.NewMultiSelect[int]().Title(title).Description("space to tick · enter to continue · the order comes next").
+				Options(opts...).Value(&ids).Limit(35).Height(min(len(pool)+4, 18)).Validate(func(v []int) error {
+				if len(v) < minFiles {
+					return fmt.Errorf("tick at least %s", plural(minFiles, "file"))
+				}
+				return nil
+			})); err != nil {
+				return err
+			}
+			// Keep the earlier order for files that stay ticked; new ones follow in folder order.
+			var chosen []media.File
+			for _, f := range p.listDraft {
+				if slices.ContainsFunc(ids, func(i int) bool { return pool[i].Path == f.Path }) {
+					chosen = append(chosen, f)
+				}
+			}
+			for _, i := range ids {
+				if !slices.ContainsFunc(chosen, func(x media.File) bool { return x.Path == pool[i].Path }) {
+					chosen = append(chosen, pool[i])
+				}
+			}
+			p.listDraft = chosen
+			return nil
+		}},
+		{run: func() error {
+			chosen := p.listDraft
+			order := allIndexes(len(chosen))
+			if len(chosen) > 1 {
+				labels := make([]string, len(chosen))
+				for i, f := range chosen {
+					labels[i] = f.Name
+				}
+				if err := p.ask.screen(func() (err error) {
+					order, err = ui.Order("Order: the first file shows first", labels)
+					return err
+				}); err != nil {
+					return err
+				}
+			}
+			p.picked = make([]media.File, len(order))
+			for i, x := range order {
+				p.picked[i] = chosen[x]
+			}
+			p.listDraft = slices.Clone(p.picked)
+			return nil
+		}},
+	}, false)
+}
+
+// localMedia describes files as the server will (video length is only known after upload).
+func localMedia(files []media.File) []api.Media {
+	out := make([]api.Media, len(files))
+	for i, f := range files {
+		out[i] = api.Media{Kind: f.Kind, Width: f.Width, Height: f.Height, SizeBytes: f.Size}
+	}
+	return out
+}
+
+func (p *poster) chooseAccounts() error {
+	accounts := p.projAcc
 	if !p.wizard {
 		terms := splitList(p.f.accounts)
 		if len(terms) == 0 {
-			terms = d.Accounts
+			terms = p.defaults.Accounts
 		}
 		if len(terms) == 0 {
 			return errors.New("choose accounts with --accounts (names, @handles, ids or platforms)")
@@ -255,181 +511,191 @@ func (p *poster) chooseAccounts(accounts []api.ProjectAccount, d *media.Defaults
 				return fmt.Errorf("%s can't post right now (%s): reconnect or enable it on the website", accountLabel(a), strings.ToLower(a.Status))
 			}
 		}
-		p.plan.Accounts = chosen
+		p.chosen = chosen
 		return nil
 	}
+	files := localMedia(p.picked)
+	hasVideo := slices.ContainsFunc(p.picked, func(f media.File) bool { return f.IsVideo() })
+	var fit []api.ProjectAccount
+	var notes []string
+	for _, a := range accounts {
+		if !a.Usable() {
+			notes = append(notes, accountLabel(a)+": "+strings.ToLower(strings.ReplaceAll(a.Status, "_", " ")))
+			continue
+		}
+		if _, why := compose.Fit(a.Platform, files); why != "" {
+			notes = append(notes, accountLabel(a)+": "+lowerFirst(strings.TrimPrefix(why, compose.PlatformLabel[a.Platform]+" ")))
+			continue
+		}
+		fit = append(fit, a)
+	}
+	if len(fit) == 0 {
+		p.env.printf("%s None of this project's accounts can post %s:\n", yellow.Render("!"), p.kindText())
+		for _, n := range notes {
+			p.env.printf("    %s\n", n)
+		}
+		return errBack
+	}
+	// Ticked: what was ticked before, else mktauto.yml's accounts, else the project's default ones, else all that fit.
 	pre := map[string]bool{}
-	if len(d.Accounts) > 0 {
-		if m, err := compose.MatchAccounts(d.Accounts, accounts); err == nil {
+	for _, a := range p.chosen {
+		pre[a.AccountID] = true
+	}
+	if len(pre) == 0 && len(p.defaults.Accounts) > 0 {
+		if m, err := compose.MatchAccounts(p.defaults.Accounts, fit); err == nil {
 			for _, a := range m {
 				pre[a.AccountID] = true
 			}
 		}
-	} else {
-		for _, a := range accounts {
+	}
+	if len(pre) == 0 {
+		for _, a := range fit {
 			pre[a.AccountID] = a.DefaultSelected
 		}
 	}
-	var opts []huh.Option[string]
-	var blocked []string
-	for _, a := range accounts {
-		if !a.Usable() {
-			blocked = append(blocked, accountLabel(a)+" ("+strings.ToLower(strings.ReplaceAll(a.Status, "_", " "))+")")
-			continue
+	if !slices.ContainsFunc(fit, func(a api.ProjectAccount) bool { return pre[a.AccountID] }) {
+		for _, a := range fit {
+			pre[a.AccountID] = true
 		}
-		opts = append(opts, huh.NewOption(accountLabel(a), a.AccountID).Selected(pre[a.AccountID]))
 	}
-	if len(blocked) > 0 {
-		p.env.printf("%s\n", faint.Render("Not available now: "+strings.Join(blocked, ", ")))
+	opts := make([]huh.Option[string], len(fit))
+	for i, a := range fit {
+		label := accountLabel(a)
+		if f, _ := compose.Fit(a.Platform, files); f != "" && !hasVideo {
+			label += faint.Render(" → " + compose.FormatLabel[f])
+		}
+		opts[i] = huh.NewOption(label, a.AccountID).Selected(pre[a.AccountID])
 	}
-	if len(opts) == 0 {
-		return errors.New("none of this project's accounts can post right now: reconnect them on the website")
+	desc := "accounts that can post " + p.kindText() + " · space to tick, enter to continue"
+	if len(notes) > 0 {
+		desc += "\n" + faint.Render("Not here: "+strings.Join(notes, " · "))
 	}
 	var ids []string
-	if err := huh.NewMultiSelect[string]().Title("Accounts").Description("space to tick, enter to continue").Options(opts...).Value(&ids).
+	if err := p.ask.form(huh.NewMultiSelect[string]().Title("Accounts").Description(desc).Options(opts...).Value(&ids).
 		Validate(func(v []string) error {
 			if len(v) == 0 {
 				return errors.New("tick at least one account")
 			}
 			return nil
-		}).Run(); err != nil {
+		})); err != nil {
 		return err
 	}
-	for _, a := range accounts {
+	p.chosen = nil
+	for _, a := range fit {
 		if slices.Contains(ids, a.AccountID) {
-			p.plan.Accounts = append(p.plan.Accounts, a)
+			p.chosen = append(p.chosen, a)
 		}
 	}
 	return nil
 }
 
-func fileLabel(f media.File) string {
-	s := f.Name + "  " + faint.Render(humanize.Bytes(uint64(f.Size)))
-	if f.Width > 0 {
-		s += faint.Render(fmt.Sprintf(" · %d×%d", f.Width, f.Height))
+func (p *poster) kindText() string {
+	images, videos := countKinds(p.picked)
+	switch {
+	case images+videos == 0:
+		return "a text post"
+	case videos == 0 && images == 1:
+		return "one image"
+	case videos == 0:
+		return fmt.Sprintf("%d images together", images)
+	case images == 0 && videos == 1:
+		return "a video"
 	}
-	if f.IsVideo() {
-		s += faint.Render(" · video")
-	}
-	return s
+	return "these images and videos together"
 }
 
-func (p *poster) chooseFiles(all []media.File) error {
-	if !p.wizard {
-		spec := strings.TrimSpace(p.f.files)
-		if spec == "" {
-			return nil // text only
-		}
-		if spec == "all" {
-			p.files = all
-			return nil
-		}
-		for _, name := range splitList(spec) {
-			f, ok := media.Describe(filepath.Join(p.env.Dir, name))
-			if !ok {
-				return fmt.Errorf("%s: not found, or not an image/video MKTAuto accepts (JPEG, PNG, WebP, GIF, MP4, MOV, WebM)", name)
-			}
-			p.files = append(p.files, f)
-		}
-		return nil
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
 	}
-	if len(all) == 0 {
-		p.env.printf("%s\n", faint.Render("No images or videos in this folder: this will be a text post."))
-		return nil
-	}
-	opts := make([]huh.Option[int], len(all))
-	for i, f := range all {
-		opts[i] = huh.NewOption(fileLabel(f), i).Selected(len(all) <= 10)
-	}
-	var picked []int
-	if err := huh.NewMultiSelect[int]().Title("Files").Description("tick the images and videos for this post (none = text only)").
-		Options(opts...).Value(&picked).Height(min(len(all)+4, 18)).Run(); err != nil {
-		return err
-	}
-	chosen := make([]media.File, len(picked))
-	labels := make([]string, len(picked))
-	for i, idx := range picked {
-		chosen[i], labels[i] = all[idx], all[idx].Name
-	}
-	order, err := ui.Order("Order: the first file shows first", labels)
-	if err != nil {
-		return err
-	}
-	for _, i := range order {
-		p.files = append(p.files, chosen[i])
-	}
-	return nil
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 // ------------------------------------------------------------------ already posted?
 
 func (p *poster) checkDuplicates(ctx context.Context) error {
-	if len(p.files) == 0 {
+	p.files = nil
+	p.plan.Accounts = slices.Clone(p.chosen)
+	p.plan.PerAccount = map[string][]int{}
+	if len(p.picked) == 0 {
 		return nil
 	}
-	p.env.printf("%s\n", faint.Render(fmt.Sprintf("Checking %s…", plural(len(p.files), "file"))))
-	if err := media.Fingerprint(p.files, nil); err != nil {
+	var todo []media.File
+	for _, f := range p.picked {
+		if f.SHA256 == "" {
+			todo = append(todo, f)
+		}
+	}
+	if len(todo) > 0 {
+		p.env.printf("%s\n", faint.Render(fmt.Sprintf("Checking %s…", plural(len(todo), "file"))))
+		if err := media.Fingerprint(todo, nil); err != nil {
+			return err
+		}
+		var hashes []string
+		for _, f := range todo {
+			for i := range p.picked {
+				if p.picked[i].Path == f.Path {
+					p.picked[i].SHA256 = f.SHA256
+				}
+			}
+			hashes = append(hashes, f.SHA256)
+		}
+		found, err := p.c.Duplicates(ctx, hashes)
+		if err != nil {
+			return err
+		}
+		for _, d := range found {
+			p.dups[d.SHA256] = d
+		}
+	}
+	var questions []step
+	for _, f := range p.picked {
+		uses := usedSomewhere(p.dups[f.SHA256].Uses)
+		if len(uses) == 0 {
+			continue
+		}
+		if !p.wizard {
+			p.env.printf("%s %s was used before:\n", yellow.Render("!"), bold.Render(f.Name))
+			for _, l := range usesLines(uses) {
+				p.env.printf("    %s\n", l)
+			}
+			if _, err := p.duplicateChoice(f); err != nil {
+				return err
+			}
+			continue
+		}
+		var had []string
+		for _, a := range p.plan.Accounts {
+			if slices.ContainsFunc(uses, func(u api.Use) bool { return u.AccountID == a.AccountID }) {
+				had = append(had, a.AccountID)
+			}
+		}
+		questions = append(questions, step{run: func() error { return p.duplicateQuestion(f, uses, had) }})
+	}
+	// Ask (each can go back to the one before), then apply the answers.
+	if err := runSteps(p.ask, questions, false); err != nil {
 		return err
-	}
-	hashes := make([]string, len(p.files))
-	for i, f := range p.files {
-		hashes[i] = f.SHA256
-	}
-	found, err := p.c.Duplicates(ctx, hashes)
-	if err != nil {
-		return err
-	}
-	p.dups = map[string]api.Duplicate{}
-	for _, d := range found {
-		p.dups[d.SHA256] = d
 	}
 	var keep []media.File
 	exclude := map[int][]string{} // index in keep → accounts that already had it
-	for _, f := range p.files {
-		d, ok := p.dups[f.SHA256]
-		uses := usedSomewhere(d.Uses)
-		if !ok || len(uses) == 0 {
+	for _, f := range p.picked {
+		uses := usedSomewhere(p.dups[f.SHA256].Uses)
+		if len(uses) == 0 {
 			keep = append(keep, f)
 			continue
 		}
 		var had []string
 		for _, a := range p.plan.Accounts {
-			for _, u := range uses {
-				if u.AccountID == a.AccountID {
-					had = append(had, a.AccountID)
-					break
-				}
+			if slices.ContainsFunc(uses, func(u api.Use) bool { return u.AccountID == a.AccountID }) {
+				had = append(had, a.AccountID)
 			}
 		}
-		p.env.printf("%s %s was used before:\n", yellow.Render("!"), bold.Render(f.Name))
-		for i, u := range uses {
-			if i == 5 {
-				p.env.printf("    … and %d more\n", len(uses)-5)
-				break
-			}
-			when := ""
-			switch {
-			case u.PublishedAt != nil:
-				when = "posted " + u.PublishedAt.Local().Format("2 Jan 2006")
-			case u.ScheduledAt != nil:
-				when = strings.ToLower(u.Status) + " for " + u.ScheduledAt.Local().Format("2 Jan 2006 15:04")
-			default:
-				when = strings.ToLower(strings.ReplaceAll(u.Status, "_", " "))
-			}
-			p.env.printf("    %s · %s · %s  %s\n", compose.PlatformLabel[u.Platform], u.AccountName, when, faint.Render(truncate(u.PostTitle, 40)))
-		}
-		choice, err := p.duplicateChoice(f, had)
-		if err != nil {
-			return err
-		}
-		switch choice {
-		case "skip":
-			p.env.printf("    %s\n", faint.Render("left out"))
-		case "new-only":
-			if len(had) == len(p.plan.Accounts) {
-				p.env.printf("    %s\n", faint.Render("every chosen account already had it: left out"))
-				continue
-			}
+		choice, _ := p.duplicateChoice(f)
+		switch {
+		case choice == "skip":
+		case choice == "new-only" && len(had) == len(p.plan.Accounts):
+			p.env.printf("  %s\n", faint.Render(f.Name+": every chosen account already had it, left out"))
+		case choice == "new-only":
 			exclude[len(keep)] = had
 			keep = append(keep, f)
 		default:
@@ -437,7 +703,6 @@ func (p *poster) checkDuplicates(ctx context.Context) error {
 		}
 	}
 	p.files = keep
-	// Start the per-account selection from those choices.
 	for i := range p.files {
 		for _, acc := range exclude[i] {
 			if _, ok := p.plan.PerAccount[acc]; !ok {
@@ -450,22 +715,31 @@ func (p *poster) checkDuplicates(ctx context.Context) error {
 			p.plan.PerAccount[acc] = slices.DeleteFunc(p.plan.PerAccount[acc], func(x int) bool { return x == i })
 		}
 	}
-	// An account that already had every file is left out of this post (rather than posting it without them).
-	if len(p.files) > 0 {
-		var keepAccounts []api.ProjectAccount
-		for _, a := range p.plan.Accounts {
-			if idx, ok := p.plan.PerAccount[a.AccountID]; ok && len(idx) == 0 {
-				p.env.printf("  %s\n", faint.Render(accountLabel(a)+": already had every file, left out of this post"))
-				delete(p.plan.PerAccount, a.AccountID)
-				continue
-			}
-			keepAccounts = append(keepAccounts, a)
+	if len(p.files) == 0 {
+		p.env.printf("%s\n", yellow.Render("! Every file was left out."))
+		if p.wizard {
+			return errBack
 		}
-		if len(keepAccounts) == 0 {
-			return errors.New("every chosen account already had these files: nothing to post")
-		}
-		p.plan.Accounts = keepAccounts
+		return errors.New("every file was left out: nothing to post")
 	}
+	// An account that already had every file is left out of this post (rather than posting it without them).
+	var keepAccounts []api.ProjectAccount
+	for _, a := range p.plan.Accounts {
+		if idx, ok := p.plan.PerAccount[a.AccountID]; ok && len(idx) == 0 {
+			p.env.printf("  %s\n", faint.Render(accountLabel(a)+": already had every file, left out of this post"))
+			delete(p.plan.PerAccount, a.AccountID)
+			continue
+		}
+		keepAccounts = append(keepAccounts, a)
+	}
+	if len(keepAccounts) == 0 {
+		if p.wizard {
+			p.env.printf("%s\n", yellow.Render("! Every chosen account already had these files."))
+			return errBack
+		}
+		return errors.New("every chosen account already had these files: nothing to post")
+	}
+	p.plan.Accounts = keepAccounts
 	return nil
 }
 
@@ -487,29 +761,68 @@ func allIndexes(n int) []int {
 	return out
 }
 
-func (p *poster) duplicateChoice(f media.File, had []string) (string, error) {
-	if !p.wizard {
-		switch p.f.duplicates {
-		case "post", "new-only", "skip":
-			return p.f.duplicates, nil
-		}
-		return "", fmt.Errorf("%s was posted before: add --duplicates=post (anyway), new-only (only accounts that haven't had it) or skip", f.Name)
+// duplicateChoice: the answer for a file used before (flag mode: --duplicates).
+func (p *poster) duplicateChoice(f media.File) (string, error) {
+	if p.wizard {
+		return p.dupChoice[f.SHA256], nil
 	}
-	choice := "new-only"
-	opts := []huh.Option[string]{}
+	switch p.f.duplicates {
+	case "post", "new-only", "skip":
+		return p.f.duplicates, nil
+	}
+	return "", fmt.Errorf("%s was posted before: add --duplicates=post (anyway), new-only (only accounts that haven't had it) or skip", f.Name)
+}
+
+// usesLines: where a file was used before (at most 5 lines).
+func usesLines(uses []api.Use) []string {
+	var lines []string
+	for i, u := range uses {
+		if i == 5 {
+			lines = append(lines, fmt.Sprintf("… and %d more", len(uses)-5))
+			break
+		}
+		when := strings.ToLower(strings.ReplaceAll(u.Status, "_", " "))
+		switch {
+		case u.PublishedAt != nil:
+			when = "posted " + u.PublishedAt.Local().Format("2 Jan 2006")
+		case u.ScheduledAt != nil:
+			when = strings.ToLower(u.Status) + " for " + u.ScheduledAt.Local().Format("2 Jan 2006 15:04")
+		}
+		lines = append(lines, fmt.Sprintf("%s · %s · %s  %s", compose.PlatformLabel[u.Platform], u.AccountName, when, truncate(u.PostTitle, 40)))
+	}
+	return lines
+}
+
+func (p *poster) duplicateQuestion(f media.File, uses []api.Use, had []string) error {
+	lines := usesLines(uses)
+	var opts []huh.Option[string]
+	def := "skip"
 	if len(had) > 0 && len(had) < len(p.plan.Accounts) {
-		opts = append(opts, huh.NewOption(fmt.Sprintf("Only to the %s that haven't had it", plural(len(p.plan.Accounts)-len(had), "account")), "new-only"))
-	} else {
-		choice = "skip"
+		n := len(p.plan.Accounts) - len(had)
+		label := fmt.Sprintf("Only to the %d accounts that haven't had it", n)
+		if n == 1 {
+			label = "Only to the account that hasn't had it"
+		}
+		opts = append(opts, huh.NewOption(label, "new-only"))
+		def = "new-only"
 	}
 	opts = append(opts, huh.NewOption("Leave this file out", "skip"), huh.NewOption("Post it again to every chosen account", "post"))
-	err := huh.NewSelect[string]().Title("What should happen with " + f.Name + "?").Options(opts...).Value(&choice).Run()
-	return choice, err
+	choice := p.dupChoice[f.SHA256]
+	if !slices.ContainsFunc(opts, func(o huh.Option[string]) bool { return o.Value == choice }) {
+		choice = def
+	}
+	if err := p.ask.form(huh.NewSelect[string]().Title(f.Name + " was used before").Description(strings.Join(lines, "\n")).
+		Options(opts...).Value(&choice)); err != nil {
+		return err
+	}
+	p.dupChoice[f.SHA256] = choice
+	return nil
 }
 
 // ------------------------------------------------------------------ cover
 
-func (p *poster) chooseCover(all []media.File) error {
+func (p *poster) chooseCover() error {
+	p.cover, p.plan.CoverFrameMs = nil, 0
 	hasVideo := slices.ContainsFunc(p.files, func(f media.File) bool { return f.IsVideo() })
 	if !hasVideo {
 		return nil
@@ -528,64 +841,79 @@ func (p *poster) chooseCover(all []media.File) error {
 		return nil
 	}
 	var images []media.File
-	for _, f := range all {
+	for _, f := range p.all {
 		if !f.IsVideo() && !slices.ContainsFunc(p.files, func(x media.File) bool { return x.Path == f.Path }) {
 			images = append(images, f)
 		}
 	}
-	choice := "none"
-	opts := []huh.Option[string]{huh.NewOption("Platform default", "none"), huh.NewOption("A second of the video", "frame")}
-	if len(images) > 0 {
-		opts = append(opts, huh.NewOption("An image from this folder (Facebook, Instagram Reels, YouTube, Pinterest)", "image"))
-	}
-	if err := huh.NewSelect[string]().Title("Video cover").Options(opts...).Value(&choice).Run(); err != nil {
-		return err
-	}
-	switch choice {
-	case "image":
-		idx := 0
-		imgOpts := make([]huh.Option[int], len(images))
-		for i, f := range images {
-			imgOpts[i] = huh.NewOption(fileLabel(f), i)
-		}
-		if err := huh.NewSelect[int]().Title("Cover image").Options(imgOpts...).Value(&idx).Run(); err != nil {
-			return err
-		}
-		c := images[idx]
-		p.cover = &c
-		fallthrough
-	case "frame":
-		if choice == "image" {
-			// TikTok can only use a frame: ask for one too.
-			if !slices.ContainsFunc(p.plan.Accounts, func(a api.ProjectAccount) bool { return a.Platform == "TIKTOK" }) {
+	hasTikTok := slices.ContainsFunc(p.plan.Accounts, func(a api.ProjectAccount) bool { return a.Platform == "TIKTOK" })
+	imageIdx := max(0, slices.IndexFunc(images, func(f media.File) bool { return f.Path == p.coverImage }))
+	return runSteps(p.ask, []step{
+		{run: func() error {
+			if p.coverChoice == "" {
+				p.coverChoice = "none"
+			}
+			opts := []huh.Option[string]{huh.NewOption("Platform default", "none"), huh.NewOption("A second of the video", "frame")}
+			if len(images) > 0 {
+				opts = append(opts, huh.NewOption("An image from this folder (Facebook, Instagram Reels, YouTube, Pinterest)", "image"))
+			} else if p.coverChoice == "image" {
+				p.coverChoice = "none"
+			}
+			return p.ask.form(huh.NewSelect[string]().Title("Video cover").Options(opts...).Value(&p.coverChoice))
+		}},
+		{run: func() error {
+			if p.coverChoice != "image" {
 				return nil
 			}
-		}
-		s := ""
-		if err := huh.NewInput().Title("Second of the video for the cover").Description("e.g. 3 or 4.5 · used where an image isn't possible (TikTok)").
-			Value(&s).Validate(func(v string) error {
-				if strings.TrimSpace(v) == "" && choice == "image" {
-					return nil
-				}
-				x, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-				if err != nil || x < 0 {
-					return errors.New("enter seconds, e.g. 3 or 4.5")
-				}
+			opts := make([]huh.Option[int], len(images))
+			for i, f := range images {
+				opts[i] = huh.NewOption(p.fileLabel(f), i)
+			}
+			if err := p.ask.form(huh.NewSelect[int]().Title("Cover image").Options(opts...).Value(&imageIdx)); err != nil {
+				return err
+			}
+			p.coverImage = images[imageIdx].Path
+			return nil
+		}},
+		{run: func() error {
+			if p.coverChoice == "none" || (p.coverChoice == "image" && !hasTikTok) {
 				return nil
-			}).Run(); err != nil {
-			return err
-		}
-		if x, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
-			p.plan.CoverFrameMs = int(x * 1000)
-		}
-	}
-	return nil
+			}
+			optional := p.coverChoice == "image"
+			desc := "e.g. 3 or 4.5"
+			if optional {
+				desc = "TikTok can only use a frame · empty = TikTok's default"
+			}
+			return p.ask.form(huh.NewInput().Title("Second of the video for the cover").Description(desc).Value(&p.coverSecond).
+				Validate(func(v string) error {
+					if strings.TrimSpace(v) == "" && optional {
+						return nil
+					}
+					if x, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil || x < 0 {
+						return errors.New("enter seconds, e.g. 3 or 4.5")
+					}
+					return nil
+				}))
+		}},
+		{run: func() error {
+			if p.coverChoice == "image" {
+				c := images[imageIdx]
+				p.cover = &c
+			}
+			if p.coverChoice != "none" {
+				if x, err := strconv.ParseFloat(strings.TrimSpace(p.coverSecond), 64); err == nil {
+					p.plan.CoverFrameMs = int(x * 1000)
+				}
+			}
+			return nil
+		}},
+	}, false)
 }
 
 // ------------------------------------------------------------------ upload
 
 func (p *poster) uploadFiles(ctx context.Context) error {
-	all := append([]media.File{}, p.files...)
+	all := slices.Clone(p.files)
 	if p.cover != nil {
 		if p.cover.SHA256 == "" {
 			p.cover.SHA256, _ = media.SHA256(p.cover.Path)
@@ -593,25 +921,32 @@ func (p *poster) uploadFiles(ctx context.Context) error {
 		all = append(all, *p.cover)
 	}
 	items := make([]compose.Item, len(all))
-	if p.f.dryRun {
-		// Nothing leaves this computer: use what's known locally (video length is measured by the server after upload).
-		for i, f := range all {
+	var todo []int
+	for i, f := range all {
+		if m, ok := p.uploaded[f.Path]; ok {
+			items[i] = compose.Item{File: f, Media: m}
+		} else if p.f.dryRun {
+			// Nothing leaves this computer: use what's known locally (video length is measured by the server after upload).
 			items[i] = compose.Item{File: f, Media: api.Media{ID: "(" + f.Name + ")", Kind: f.Kind, Width: f.Width, Height: f.Height, SizeBytes: f.Size}}
+		} else {
+			todo = append(todo, i)
 		}
-	} else if len(all) > 0 {
-		names := make([]string, len(all))
-		sizes := make([]int64, len(all))
-		for i, f := range all {
-			names[i], sizes[i] = f.Name, f.Size
+	}
+	if len(todo) > 0 {
+		names := make([]string, len(todo))
+		sizes := make([]int64, len(todo))
+		for j, i := range todo {
+			names[j], sizes[j] = all[i].Name, all[i].Size
 		}
 		prog := ui.StartProgress(names, sizes, p.env.Interactive, func(s string) { p.env.printf("%s\n", s) })
 		up := upload.New(p.c)
 		var wg sync.WaitGroup
-		errs := make([]error, len(all))
+		var mu sync.Mutex
+		errs := make([]error, len(todo))
 		sem := make(chan struct{}, 2)
-		for i, f := range all {
+		for j, i := range todo {
 			wg.Add(1)
-			go func(i int, f media.File) {
+			go func(j, i int, f media.File) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -619,19 +954,25 @@ func (p *poster) uploadFiles(ctx context.Context) error {
 				if d, ok := p.dups[f.SHA256]; ok && d.StorageStatus == "STORED" && d.AssetID != "" {
 					if m, err := p.c.Media(ctx, d.AssetID); err == nil && m.StorageStatus == "STORED" {
 						items[i] = compose.Item{File: f, Media: *m}
-						prog.Finish(i, "reused")
+						mu.Lock()
+						p.uploaded[f.Path] = *m
+						mu.Unlock()
+						prog.Finish(j, "reused")
 						return
 					}
 				}
-				m, err := up.Upload(ctx, f, p.plan.Project.ID, func(sent, _ int64) { prog.Update(i, sent) })
+				m, err := up.Upload(ctx, f, p.plan.Project.ID, func(sent, _ int64) { prog.Update(j, sent) })
 				if err != nil {
-					errs[i] = err
-					prog.Finish(i, "failed")
+					errs[j] = err
+					prog.Finish(j, "failed")
 					return
 				}
 				items[i] = compose.Item{File: f, Media: *m}
-				prog.Finish(i, "done")
-			}(i, f)
+				mu.Lock()
+				p.uploaded[f.Path] = *m
+				mu.Unlock()
+				prog.Finish(j, "done")
+			}(j, i, all[i])
 		}
 		wg.Wait()
 		prog.Done()
@@ -639,6 +980,7 @@ func (p *poster) uploadFiles(ctx context.Context) error {
 			return err
 		}
 	}
+	p.plan.CoverIndex = -1
 	if p.cover != nil {
 		p.plan.CoverIndex = len(items) - 1
 	}
@@ -674,9 +1016,6 @@ func (p *poster) choosePerAccount() error {
 		}
 		return nil
 	}
-	if n < 2 && len(p.plan.PerAccount) == 0 {
-		return nil
-	}
 	if n < 2 {
 		return nil
 	}
@@ -697,6 +1036,9 @@ func (p *poster) choosePerAccount() error {
 		for r := range rows {
 			sel[r][c] = !ok || slices.Contains(idx, r)
 		}
+		if ok && !slices.IsSorted(idx) {
+			own[c] = slices.Clone(idx)
+		}
 	}
 	verdict := func(c int, ticked []int) ui.Verdict {
 		order := orderFor(own[c], ticked)
@@ -704,14 +1046,24 @@ func (p *poster) choosePerAccount() error {
 		for i, r := range order {
 			ms[i] = p.plan.Items[r].Media
 		}
-		f := compose.AutoFormat(accs[c].Platform, ms)
+		f, _ := compose.Fit(accs[c].Platform, ms)
 		if f == "" {
 			return ui.Verdict{Label: "can't post", OK: false}
 		}
 		return ui.Verdict{Label: fmt.Sprintf("%s (%d)", compose.FormatLabel[f], len(order)), OK: true}
 	}
-	for {
-		col, err := ui.Grid(rows, cols, sel, verdict)
+	for first := true; ; first = false {
+		col := -1
+		show := func() (err error) {
+			col, err = ui.Grid(rows, cols, sel, verdict)
+			return err
+		}
+		var err error
+		if first {
+			err = p.ask.screen(show) // one question, however often the grid comes back after an order screen
+		} else {
+			err = uiErr(show())
+		}
 		if err != nil {
 			return err
 		}
@@ -730,7 +1082,10 @@ func (p *poster) choosePerAccount() error {
 			labels[i] = rows[r]
 		}
 		order, err := ui.Order("Order for "+cols[col].Short, labels)
-		if err != nil && !errors.Is(err, ui.ErrCancelled) {
+		if errors.Is(err, ui.ErrCancelled) {
+			return huh.ErrUserAborted
+		}
+		if err != nil && !errors.Is(err, ui.ErrBack) {
 			return err
 		}
 		if err == nil {
@@ -784,8 +1139,73 @@ func platformShort(p string) string {
 
 // ------------------------------------------------------------------ texts and per-platform settings
 
-func (p *poster) details(ctx context.Context, d *media.Defaults) error {
+// finalLength: about how long the text gets on the platform (caption, then the hashtags).
+func (p *poster) finalLength(platform, caption string) int {
+	text := strings.TrimSpace(caption)
+	if len(p.plan.Hashtags) > 0 {
+		text += "\n\n#" + strings.Join(p.plan.Hashtags, " #")
+	}
+	return compose.TextLength(platform, text)
+}
+
+// tooLong: accounts whose text would be over the platform's limit, with a line saying so.
+func (p *poster) tooLong(caption func(a api.ProjectAccount) string) map[string]string {
+	out := map[string]string{}
+	for _, a := range p.plan.Accounts {
+		limit := compose.MaxText(a.Platform, p.plan.FormatFor(a))
+		if n := p.finalLength(a.Platform, caption(a)); limit > 0 && n > limit {
+			out[a.AccountID] = fmt.Sprintf("%s allows %s characters; this text has about %s", accountLabel(a), humanize.Comma(int64(limit)), humanize.Comma(int64(n)))
+		}
+	}
+	return out
+}
+
+// limitsLine: the text limits of the chosen accounts, shortest first ("X 280 · Threads 500 · Instagram 2,200").
+func (p *poster) limitsLine() string {
+	seen := map[string]int{}
+	for _, a := range p.plan.Accounts {
+		if l := compose.MaxText(a.Platform, p.plan.FormatFor(a)); l > 0 && l < 10000 {
+			seen[compose.PlatformLabel[a.Platform]] = l
+		}
+	}
+	type pl struct {
+		name  string
+		limit int
+	}
+	var list []pl
+	for n, l := range seen {
+		list = append(list, pl{n, l})
+	}
+	slices.SortFunc(list, func(a, b pl) int { return a.limit - b.limit })
+	var parts []string
+	for _, x := range list {
+		parts = append(parts, x.name+" "+humanize.Comma(int64(x.limit)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Limits: " + strings.Join(parts, " · ")
+}
+
+func (p *poster) initTexts() error {
 	plan := p.plan
+	first := ""
+	if len(p.files) > 0 {
+		first = p.files[0].Path
+	}
+	if p.textsSet {
+		// The caption came from the first file's .txt and the first file changed: take the new one's.
+		if p.captionFrom != "" && p.captionFrom != first && plan.Caption == media.SidecarCaption(media.File{Path: p.captionFrom, Name: filepath.Base(p.captionFrom)}) {
+			plan.Caption, p.captionFrom = "", ""
+			if first != "" {
+				if c := media.SidecarCaption(p.files[0]); c != "" {
+					plan.Caption, p.captionFrom = c, first
+				}
+			}
+		}
+		return nil
+	}
+	p.textsSet = true
 	caption := p.f.caption
 	if p.f.captionFile != "" {
 		data, err := os.ReadFile(p.f.captionFile)
@@ -794,114 +1214,285 @@ func (p *poster) details(ctx context.Context, d *media.Defaults) error {
 		}
 		caption = strings.TrimSpace(string(data))
 	}
-	if caption == "" {
-		caption = d.Caption
+	caption = firstNonEmpty(caption, p.defaults.Caption)
+	if caption == "" && first != "" {
+		if caption = media.SidecarCaption(p.files[0]); caption != "" {
+			p.captionFrom = first
+		}
 	}
-	if caption == "" && len(p.files) > 0 {
-		caption = media.SidecarCaption(p.files[0])
-	}
-	hashtags := p.f.hashtags
-	if hashtags == "" {
-		hashtags = strings.Join(d.Hashtags, " ")
-	}
-	link := firstNonEmpty(p.f.link, d.Link)
-	firstComment := firstNonEmpty(p.f.firstComm, d.FirstComment)
-	ai := p.f.ai || (d.MadeWithAI != nil && *d.MadeWithAI)
+	p.hashtags = firstNonEmpty(p.f.hashtags, strings.Join(p.defaults.Hashtags, " "))
+	plan.Caption = caption
+	plan.Link = firstNonEmpty(p.f.link, p.defaults.Link)
+	plan.FirstComment = firstNonEmpty(p.f.firstComm, p.defaults.FirstComment)
+	plan.MadeWithAI = p.f.ai || (p.defaults.MadeWithAI != nil && *p.defaults.MadeWithAI)
 	plan.InternalTitle = p.f.title
-	needsComment := slices.ContainsFunc(plan.Accounts, func(a api.ProjectAccount) bool { return compose.CommentsOn(a.Platform, plan.FormatFor(a)) })
+	return nil
+}
 
+func (p *poster) details() error {
+	if err := p.initTexts(); err != nil {
+		return err
+	}
+	plan := p.plan
 	if p.wizard {
+		needsComment := slices.ContainsFunc(plan.Accounts, func(a api.ProjectAccount) bool { return compose.CommentsOn(a.Platform, plan.FormatFor(a)) })
+		limits := p.limitsLine()
+		count := func() string {
+			s := humanize.Comma(int64(len([]rune(plan.Caption)))) + " characters"
+			if limits != "" {
+				s += " · " + limits
+			}
+			return s + " · ctrl+e opens your editor"
+		}
 		fields := []huh.Field{
 			huh.NewInput().Title("Internal name (only you see it)").Placeholder("optional").Value(&plan.InternalTitle),
-			huh.NewText().Title("Caption").Description("ctrl+e opens your editor").Value(&caption).CharLimit(63000).Lines(5).ExternalEditor(true),
-			huh.NewInput().Title("Hashtags").Placeholder("android kotlin #productivity").Value(&hashtags),
-			huh.NewInput().Title("Link").Placeholder("https://… (optional)").Value(&link),
+			huh.NewText().Title("Caption").DescriptionFunc(count, &plan.Caption).Value(&plan.Caption).CharLimit(63000).Lines(5).ExternalEditor(true),
+			huh.NewInput().Title("Hashtags").Placeholder("android kotlin #productivity").Value(&p.hashtags),
+			huh.NewInput().Title("Link").Placeholder("https://… (optional)").Value(&plan.Link),
 		}
 		if needsComment {
-			fields = append(fields, huh.NewInput().Title("First comment").Description("Facebook Pages and Instagram, right after the post goes live").Value(&firstComment))
+			fields = append(fields, huh.NewInput().Title("First comment").Description("Facebook Pages and Instagram, right after the post goes live").Value(&plan.FirstComment))
 		}
-		fields = append(fields, huh.NewConfirm().Title("Made with AI?").Description("Adds each platform's own AI label (none exists on Facebook)").Value(&ai))
-		if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
+		fields = append(fields, huh.NewConfirm().Title("Made with AI?").Description("Adds each platform's own AI label (none exists on Facebook)").Value(&plan.MadeWithAI))
+		if err := p.ask.form(fields...); err != nil {
 			return err
 		}
 	}
-	plan.Caption, plan.Link, plan.FirstComment, plan.MadeWithAI = caption, link, firstComment, ai
-	plan.Hashtags = compose.ParseHashtags(hashtags)
-	for _, a := range mustMatch(splitList(p.f.aiOff), plan.Accounts) {
-		plan.AIOverride[a.AccountID] = false
+	plan.Hashtags = compose.ParseHashtags(p.hashtags)
+	return nil
+}
+
+// captionsPerAccount: the same caption everywhere, or an account's own. An own caption starts empty, from a copy
+// of the main one, or keeps what was written for it before.
+func (p *poster) captionsPerAccount() error {
+	plan := p.plan
+	if !p.wizard {
+		return nil
 	}
-	if p.wizard && ai && len(plan.Accounts) > 1 {
-		var opts []huh.Option[string]
-		for _, a := range plan.Accounts {
-			if compose.AILabelSupported(a.Platform, false) {
-				opts = append(opts, huh.NewOption(accountLabel(a), a.AccountID).Selected(true))
-			}
+	over := p.tooLong(func(api.ProjectAccount) string { return plan.Caption })
+	if len(plan.Accounts) < 2 && len(over) == 0 {
+		clear(plan.Captions)
+		return nil
+	}
+	if p.captionMode == "" {
+		p.captionMode = "same"
+		if len(over) > 0 {
+			p.captionMode = "own"
 		}
-		if len(opts) > 1 {
-			var on []string
-			if err := huh.NewMultiSelect[string]().Title("AI label on").Options(opts...).Value(&on).Run(); err != nil {
-				return err
-			}
-			for _, o := range opts {
-				if !slices.Contains(on, o.Value) {
-					plan.AIOverride[o.Value] = false
+	}
+	return runSteps(p.ask, []step{
+		{run: func() error {
+			desc := ""
+			if len(over) > 0 {
+				var lines []string
+				for _, a := range plan.Accounts {
+					if l, ok := over[a.AccountID]; ok {
+						lines = append(lines, yellow.Render("! ")+l)
+					}
 				}
+				desc = strings.Join(lines, "\n")
 			}
-		}
-	}
-	if p.wizard && len(plan.Accounts) > 1 {
-		different := false
-		if err := huh.NewConfirm().Title("A different caption for some accounts?").Value(&different).Run(); err != nil {
-			return err
-		}
-		if different {
+			return p.ask.form(huh.NewSelect[string]().Title("Caption on each account").Description(desc).Options(
+				huh.NewOption("The same caption everywhere", "same"),
+				huh.NewOption("A different caption for some accounts", "own")).Value(&p.captionMode))
+		}},
+		{run: func() error {
+			if p.captionMode == "same" {
+				clear(plan.Captions)
+				return nil
+			}
 			var ids []string
 			opts := make([]huh.Option[string], len(plan.Accounts))
 			for i, a := range plan.Accounts {
-				opts[i] = huh.NewOption(accountLabel(a), a.AccountID)
+				_, had := plan.Captions[a.AccountID]
+				_, long := over[a.AccountID]
+				label := accountLabel(a)
+				if long {
+					label += yellow.Render(" · too long")
+				}
+				sel := had || long || slices.Contains(p.captionIDs, a.AccountID)
+				if sel {
+					ids = append(ids, a.AccountID)
+				}
+				opts[i] = huh.NewOption(label, a.AccountID).Selected(sel)
 			}
-			if err := huh.NewMultiSelect[string]().Title("Which accounts").Options(opts...).Value(&ids).Run(); err != nil {
+			if err := p.ask.form(huh.NewMultiSelect[string]().Title("Which accounts get their own caption").Options(opts...).Value(&ids).
+				Validate(func(v []string) error {
+					if len(v) == 0 {
+						return errors.New("tick at least one (or go back and choose the same caption everywhere)")
+					}
+					return nil
+				})); err != nil {
 				return err
 			}
+			p.captionIDs = ids
+			return nil
+		}},
+		{run: func() error {
+			if p.captionMode == "same" {
+				return nil
+			}
+			ids := p.captionIDs
+			var steps []step
 			for _, a := range plan.Accounts {
 				if slices.Contains(ids, a.AccountID) {
-					c := caption
-					if err := huh.NewText().Title("Caption for " + accountLabel(a)).Value(&c).Lines(5).ExternalEditor(true).Run(); err != nil {
-						return err
-					}
-					plan.Captions[a.AccountID] = c
+					steps = append(steps, p.ownCaptionSteps(a)...)
 				}
 			}
+			if err := runSteps(p.ask, steps, false); err != nil {
+				return err
+			}
+			for id := range plan.Captions {
+				if !slices.Contains(ids, id) {
+					delete(plan.Captions, id)
+				}
+			}
+			return nil
+		}},
+	}, false)
+}
+
+func (p *poster) ownCaptionSteps(a api.ProjectAccount) []step {
+	plan := p.plan
+	limit := compose.MaxText(a.Platform, plan.FormatFor(a))
+	fresh := false
+	return []step{
+		{run: func() error {
+			_, had := p.ownCaption[a.AccountID]
+			var opts []huh.Option[string]
+			if had {
+				opts = append(opts, huh.NewOption("Keep what I wrote for it", "keep"), huh.NewOption("Edit it", "edit"))
+			}
+			opts = append(opts, huh.NewOption("Start with an empty box", "empty"), huh.NewOption("Edit a copy of the main caption", "copy"))
+			start := p.captionHow[a.AccountID]
+			if !slices.ContainsFunc(opts, func(o huh.Option[string]) bool { return o.Value == start }) {
+				start = opts[0].Value
+			}
+			desc := ""
+			if limit > 0 && limit < 10000 {
+				desc = fmt.Sprintf("%s takes up to %s characters (hashtags included)", compose.PlatformLabel[a.Platform], humanize.Comma(int64(limit)))
+			}
+			passing := p.ask.replaying()
+			if err := p.ask.form(huh.NewSelect[string]().Title("Caption for " + accountLabel(a)).Description(desc).Options(opts...).Value(&start)); err != nil {
+				return err
+			}
+			p.captionHow[a.AccountID] = start
+			fresh = !passing // just answered: the box starts as chosen; otherwise it shows what was written
+			return nil
+		}},
+		{run: func() error {
+			text := ""
+			start := p.captionHow[a.AccountID]
+			if _, written := p.ownCaption[a.AccountID]; !fresh && written {
+				start = "edit" // came back to this box: show the text as it was written
+			}
+			fresh = false
+			switch start {
+			case "keep":
+				plan.Captions[a.AccountID] = p.ownCaption[a.AccountID]
+				return nil
+			case "edit":
+				text = p.ownCaption[a.AccountID]
+			case "copy":
+				text = plan.Caption
+			}
+			count := func() string {
+				n := p.finalLength(a.Platform, text)
+				s := humanize.Comma(int64(n)) + " characters with the hashtags"
+				if limit > 0 && limit < 10000 {
+					s += " · up to " + humanize.Comma(int64(limit))
+				}
+				return s + " · ctrl+e opens your editor"
+			}
+			if err := p.ask.form(huh.NewText().Title("Caption for "+accountLabel(a)).DescriptionFunc(count, &text).Value(&text).
+				Lines(6).CharLimit(63000).ExternalEditor(true).Validate(func(s string) error {
+				if n := p.finalLength(a.Platform, s); limit > 0 && n > limit {
+					return fmt.Errorf("%s allows %s characters (now about %s)", compose.PlatformLabel[a.Platform], humanize.Comma(int64(limit)), humanize.Comma(int64(n)))
+				}
+				return nil
+			})); err != nil {
+				return err
+			}
+			p.ownCaption[a.AccountID] = text
+			plan.Captions[a.AccountID] = text
+			return nil
+		}},
+	}
+}
+
+// aiPerAccount: with "made with AI" on, which accounts get the label.
+func (p *poster) aiPerAccount() error {
+	plan := p.plan
+	clear(plan.AIOverride)
+	for _, a := range mustMatch(splitList(p.f.aiOff), plan.Accounts) {
+		plan.AIOverride[a.AccountID] = false
+	}
+	if !p.wizard || !plan.MadeWithAI {
+		return nil
+	}
+	var opts []huh.Option[string]
+	for _, a := range plan.Accounts {
+		if compose.AILabelSupported(a.Platform, false) {
+			opts = append(opts, huh.NewOption(accountLabel(a), a.AccountID).Selected(!p.aiOff()[a.AccountID]))
 		}
 	}
-	for _, a := range plan.Accounts {
-		var err error
-		switch a.Platform {
-		case "YOUTUBE":
-			err = p.youtube(a)
-		case "PINTEREST":
-			err = p.pinterest(ctx, a)
-		case "TIKTOK":
-			err = p.tiktokSettings(ctx, a)
-		}
-		if err != nil {
-			return err
+	if len(opts) < 2 {
+		return nil
+	}
+	var on []string
+	if err := p.ask.form(huh.NewMultiSelect[string]().Title("AI label on").Options(opts...).Value(&on)); err != nil {
+		return err
+	}
+	p.aiOffIDs = nil
+	for _, o := range opts {
+		if !slices.Contains(on, o.Value) {
+			plan.AIOverride[o.Value] = false
+			p.aiOffIDs = append(p.aiOffIDs, o.Value)
 		}
 	}
 	return nil
 }
 
+func (p *poster) aiOff() map[string]bool {
+	out := map[string]bool{}
+	for _, id := range p.aiOffIDs {
+		out[id] = true
+	}
+	return out
+}
+
+func (p *poster) platformSettings(ctx context.Context) error {
+	var steps []step
+	for _, a := range p.plan.Accounts {
+		switch a.Platform {
+		case "YOUTUBE":
+			steps = append(steps, step{run: func() error { return p.youtube(a) }})
+		case "PINTEREST":
+			steps = append(steps, step{run: func() error { return p.pinterest(ctx, a) }})
+		case "TIKTOK":
+			steps = append(steps, step{run: func() error { return p.tiktokSettings(ctx, a) }})
+		}
+	}
+	return runSteps(p.ask, steps, false)
+}
+
 func (p *poster) youtube(a api.ProjectAccount) error {
-	title := firstNonEmpty(p.f.title, p.plan.InternalTitle, firstLine(p.plan.Caption))
+	title, ok := p.plan.Titles[a.AccountID]
+	if !ok {
+		title = firstNonEmpty(p.f.title, p.plan.InternalTitle, firstLine(p.plan.Caption))
+	}
 	if len([]rune(title)) > 100 {
 		title = string([]rune(title)[:100])
 	}
-	privacy := p.f.youtubePrivacy
+	privacy, ok := p.plan.YouTubePrivacy[a.AccountID]
+	if !ok {
+		privacy = p.f.youtubePrivacy
+	}
 	if privacy == "public" {
 		privacy = ""
 	}
 	if p.wizard {
-		if err := huh.NewForm(huh.NewGroup(
+		if err := p.ask.form(
 			huh.NewInput().Title("YouTube title · "+a.DisplayName).CharLimit(100).Value(&title).Validate(func(s string) error {
 				if strings.TrimSpace(s) == "" {
 					return errors.New("YouTube needs a title")
@@ -909,7 +1500,7 @@ func (p *poster) youtube(a api.ProjectAccount) error {
 				return nil
 			}),
 			huh.NewSelect[string]().Title("Visibility").Options(huh.NewOption("Public", ""), huh.NewOption("Unlisted", "unlisted"), huh.NewOption("Private", "private")).Value(&privacy),
-		)).Run(); err != nil {
+		); err != nil {
 			return err
 		}
 	}
@@ -919,9 +1510,15 @@ func (p *poster) youtube(a api.ProjectAccount) error {
 }
 
 func (p *poster) pinterest(ctx context.Context, a api.ProjectAccount) error {
-	board := p.f.board
-	title := firstNonEmpty(p.f.title, p.plan.InternalTitle)
-	pinLink := ""
+	board, ok := p.plan.Boards[a.AccountID]
+	if !ok {
+		board = p.f.board
+	}
+	title, ok := p.plan.Titles[a.AccountID]
+	if !ok {
+		title = firstNonEmpty(p.f.title, p.plan.InternalTitle)
+	}
+	pinLink := p.plan.PinLinks[a.AccountID]
 	if p.wizard {
 		accounts, err := p.c.Accounts(ctx)
 		if err != nil {
@@ -947,7 +1544,7 @@ func (p *poster) pinterest(ctx context.Context, a api.ProjectAccount) error {
 			fields = append(fields, huh.NewSelect[string]().Title("Board").Options(opts...).Value(&board))
 		}
 		fields = append(fields, huh.NewInput().Title("Pin link").Placeholder(firstNonEmpty(p.plan.Link, "empty = the post's link")).Value(&pinLink))
-		if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
+		if err := p.ask.form(fields...); err != nil {
 			return err
 		}
 	}
@@ -960,98 +1557,131 @@ func (p *poster) pinterest(ctx context.Context, a api.ProjectAccount) error {
 // tiktokSettings follows TikTok's rules for posting apps: the creator's nickname and current options are shown,
 // nothing is preselected for privacy, interactions are off unless turned on, and commercial content is declared.
 func (p *poster) tiktokSettings(ctx context.Context, a api.ProjectAccount) error {
-	info, err := p.c.TikTokCreatorInfo(ctx, a.AccountID)
-	if err != nil {
-		return fmt.Errorf("TikTok %s: %w", a.DisplayName, err)
+	info := p.tiktok[a.AccountID]
+	if info == nil {
+		var err error
+		if info, err = p.c.TikTokCreatorInfo(ctx, a.AccountID); err != nil {
+			return fmt.Errorf("TikTok %s: %w", a.DisplayName, err)
+		}
+		p.tiktok[a.AccountID] = info
 	}
-	p.tiktok[a.AccountID] = info
-	c := compose.TikTokChoice{Privacy: p.f.tiktokPrivacy, Draft: p.f.tiktokDraft}
-	for _, x := range splitList(p.f.tiktokAllow) {
-		switch strings.ToLower(x) {
-		case "comments", "comment":
-			c.AllowComments = true
-		case "duet":
-			c.AllowDuet = true
-		case "stitch":
-			c.AllowStitch = true
+	c, ok := p.plan.TikTok[a.AccountID]
+	if !ok {
+		c = compose.TikTokChoice{Privacy: p.f.tiktokPrivacy, Draft: p.f.tiktokDraft}
+		for _, x := range splitList(p.f.tiktokAllow) {
+			switch strings.ToLower(x) {
+			case "comments", "comment":
+				c.AllowComments = true
+			case "duet":
+				c.AllowDuet = true
+			case "stitch":
+				c.AllowStitch = true
+			}
 		}
 	}
 	format := p.plan.FormatFor(a)
 	if p.wizard {
-		p.env.printf("\n%s %s (@%s)\n", bold.Render("TikTok:"), info.Nickname, info.Username)
-		mode := "direct"
-		if err := huh.NewSelect[string]().Title("How to send it to TikTok").Options(
-			huh.NewOption("Post directly", "direct"),
-			huh.NewOption("Send to my TikTok inbox as a draft (I finish it in the app)", "draft")).Value(&mode).Run(); err != nil {
-			return err
+		who := fmt.Sprintf("TikTok · %s (@%s)", info.Nickname, info.Username)
+		mode := map[bool]string{false: "direct", true: "draft"}[c.Draft]
+		var allow, kinds []string
+		if c.AllowComments {
+			allow = append(allow, "comments")
 		}
-		c.Draft = mode == "draft"
-		if !c.Draft {
-			var opts []huh.Option[string]
-			for _, o := range info.PrivacyLevelOptions {
-				label := compose.TikTokPrivacyLabel[o]
-				if label == "" {
-					label = o
+		if c.AllowDuet {
+			allow = append(allow, "duet")
+		}
+		if c.AllowStitch {
+			allow = append(allow, "stitch")
+		}
+		if c.BrandOrganic {
+			kinds = append(kinds, "organic")
+		}
+		if c.BrandContent {
+			kinds = append(kinds, "content")
+		}
+		title := p.plan.Titles[a.AccountID]
+		err := runSteps(p.ask, []step{
+			{run: func() error {
+				return p.ask.form(huh.NewSelect[string]().Title(who).Description("How to send it to TikTok").Options(
+					huh.NewOption("Post directly", "direct"),
+					huh.NewOption("Send to my TikTok inbox as a draft (I finish it in the app)", "draft")).Value(&mode))
+			}},
+			{run: func() error {
+				c.Draft = mode == "draft"
+				if c.Draft {
+					return nil
 				}
-				if !info.Audited && o != compose.TikTokSelfOnly {
-					label += " (after TikTok's audit)"
+				var opts []huh.Option[string]
+				for _, o := range info.PrivacyLevelOptions {
+					label := compose.TikTokPrivacyLabel[o]
+					if label == "" {
+						label = o
+					}
+					if !info.Audited && o != compose.TikTokSelfOnly {
+						label += " (after TikTok's audit)"
+					}
+					opts = append(opts, huh.NewOption(label, o))
 				}
-				opts = append(opts, huh.NewOption(label, o))
-			}
-			var allow []string
-			allowOpts := []huh.Option[string]{}
-			if !info.CommentDisabled {
-				allowOpts = append(allowOpts, huh.NewOption("Comments", "comments"))
-			}
-			if format == "VIDEO" {
-				if !info.DuetDisabled {
-					allowOpts = append(allowOpts, huh.NewOption("Duet", "duet"))
+				allowOpts := []huh.Option[string]{}
+				if !info.CommentDisabled {
+					allowOpts = append(allowOpts, huh.NewOption("Comments", "comments"))
 				}
-				if !info.StitchDisabled {
-					allowOpts = append(allowOpts, huh.NewOption("Stitch", "stitch"))
+				if format == "VIDEO" {
+					if !info.DuetDisabled {
+						allowOpts = append(allowOpts, huh.NewOption("Duet", "duet"))
+					}
+					if !info.StitchDisabled {
+						allowOpts = append(allowOpts, huh.NewOption("Stitch", "stitch"))
+					}
 				}
-			}
-			fields := []huh.Field{huh.NewSelect[string]().Title("Who can view this post").Options(opts...).Value(&c.Privacy).Validate(func(v string) error {
-				if v == "" {
-					return errors.New("choose who can view it")
+				for i := range allowOpts {
+					allowOpts[i] = allowOpts[i].Selected(slices.Contains(allow, allowOpts[i].Value))
 				}
-				if !info.Audited && v != compose.TikTokSelfOnly {
-					return errors.New(`until TikTok's audit is approved, posts must be "Only me"`)
+				fields := []huh.Field{huh.NewSelect[string]().Title(who + " · who can view this post").Options(opts...).Value(&c.Privacy).Validate(func(v string) error {
+					if v == "" {
+						return errors.New("choose who can view it")
+					}
+					if !info.Audited && v != compose.TikTokSelfOnly {
+						return errors.New(`until TikTok's audit is approved, posts must be "Only me"`)
+					}
+					return nil
+				})}
+				if len(allowOpts) > 0 {
+					fields = append(fields, huh.NewMultiSelect[string]().Title("Allow").Options(allowOpts...).Value(&allow))
 				}
-				return nil
-			})}
-			if len(allowOpts) > 0 {
-				fields = append(fields, huh.NewMultiSelect[string]().Title("Allow").Options(allowOpts...).Value(&allow))
-			}
-			fields = append(fields, huh.NewConfirm().Title("Commercial content?").Description("Promotes yourself, a brand, product or service").Value(&c.BrandDisclose))
-			if err := huh.NewForm(huh.NewGroup(fields...)).Run(); err != nil {
-				return err
-			}
-			c.AllowComments, c.AllowDuet, c.AllowStitch = slices.Contains(allow, "comments"), slices.Contains(allow, "duet"), slices.Contains(allow, "stitch")
-			if c.BrandDisclose {
-				var kinds []string
-				if err := huh.NewMultiSelect[string]().Title("What kind").Options(
-					huh.NewOption("Your brand (you promote yourself or your business)", "organic"),
-					huh.NewOption("Branded content (a paid partnership with a third party)", "content")).Value(&kinds).Validate(func(v []string) error {
+				fields = append(fields, huh.NewConfirm().Title("Commercial content?").Description("Promotes yourself, a brand, product or service").Value(&c.BrandDisclose))
+				return p.ask.form(fields...)
+			}},
+			{run: func() error {
+				if c.Draft || !c.BrandDisclose {
+					return nil
+				}
+				o1 := huh.NewOption("Your brand (you promote yourself or your business)", "organic").Selected(slices.Contains(kinds, "organic"))
+				o2 := huh.NewOption("Branded content (a paid partnership with a third party)", "content").Selected(slices.Contains(kinds, "content"))
+				return p.ask.form(huh.NewMultiSelect[string]().Title("What kind of commercial content").Options(o1, o2).Value(&kinds).Validate(func(v []string) error {
 					if len(v) == 0 {
 						return errors.New(`choose "Your brand", "Branded content" or both`)
 					}
 					return nil
-				}).Run(); err != nil {
-					return err
+				}))
+			}},
+			{run: func() error {
+				if format != "PHOTO_POST" || c.Draft {
+					return nil
 				}
-				c.BrandOrganic, c.BrandContent = slices.Contains(kinds, "organic"), slices.Contains(kinds, "content")
-			}
-			if label := compose.TikTokLabel(c); label != "" {
-				p.env.printf("  Your post will be labeled %q.\n", label)
-			}
+				if title == "" {
+					title = p.plan.InternalTitle
+				}
+				return p.ask.form(huh.NewInput().Title("TikTok photo title").CharLimit(90).Value(&title))
+			}},
+		}, false)
+		if err != nil {
+			return err
 		}
+		c.AllowComments, c.AllowDuet, c.AllowStitch = slices.Contains(allow, "comments"), slices.Contains(allow, "duet"), slices.Contains(allow, "stitch")
+		c.BrandOrganic, c.BrandContent = c.BrandDisclose && slices.Contains(kinds, "organic"), c.BrandDisclose && slices.Contains(kinds, "content")
 		if format == "PHOTO_POST" && !c.Draft {
-			t := firstNonEmpty(p.plan.InternalTitle)
-			if err := huh.NewInput().Title("TikTok photo title").CharLimit(90).Value(&t).Run(); err != nil {
-				return err
-			}
-			p.plan.Titles[a.AccountID] = t
+			p.plan.Titles[a.AccountID] = title
 		}
 	}
 	var videoMs []int
@@ -1067,10 +1697,10 @@ func (p *poster) tiktokSettings(ctx context.Context, a api.ProjectAccount) error
 	return nil
 }
 
-// ------------------------------------------------------------------ when
+// ------------------------------------------------------------------ when, review
 
-func (p *poster) chooseWhen(ctx context.Context, d *media.Defaults) error {
-	when := strings.ToLower(strings.TrimSpace(firstNonEmpty(p.f.when, d.When, "draft")))
+func (p *poster) chooseWhen(ctx context.Context) error {
+	when := strings.ToLower(strings.TrimSpace(firstNonEmpty(p.f.when, p.defaults.When, "draft")))
 	if p.wizard {
 		opts := []huh.Option[string]{huh.NewOption("Save as a draft (finish on the website)", "draft")}
 		if p.me.Allows("SCHEDULE") {
@@ -1079,29 +1709,48 @@ func (p *poster) chooseWhen(ctx context.Context, d *media.Defaults) error {
 		if p.me.Allows("PUBLISH") {
 			opts = append(opts, huh.NewOption("Publish now", "now"))
 		}
-		if p.me.RequiresApproval && p.me.Allows("SCHEDULE") {
-			p.env.printf("%s\n", faint.Render("Scheduling and publishing go to an admin for approval first."))
+		if p.whenChoice == "" {
+			p.whenChoice = "draft"
+			if slices.ContainsFunc(opts, func(o huh.Option[string]) bool { return o.Value == when }) {
+				p.whenChoice = when
+			} else if _, err := compose.LocalDateTime(when); err == nil && p.me.Allows("SCHEDULE") {
+				p.whenChoice, p.whenAt = "at", when
+			}
 		}
-		when = "draft"
-		if err := huh.NewSelect[string]().Title("When").Options(opts...).Value(&when).Run(); err != nil {
+		if p.whenAt == "" {
+			p.whenAt = time.Now().Add(time.Hour).Format("2006-01-02 15:00")
+		}
+		desc := ""
+		if p.me.RequiresApproval && p.me.Allows("SCHEDULE") {
+			desc = "Scheduling and publishing go to an admin for approval first."
+		}
+		err := runSteps(p.ask, []step{
+			{run: func() error {
+				return p.ask.form(huh.NewSelect[string]().Title("When").Description(desc).Options(opts...).Value(&p.whenChoice))
+			}},
+			{run: func() error {
+				if p.whenChoice != "at" {
+					return nil
+				}
+				return p.ask.form(huh.NewInput().Title("Date and time (" + p.plan.Project.Timezone + ")").Description("YYYY-MM-DD HH:MM").Value(&p.whenAt).
+					Validate(func(s string) error {
+						local, err := compose.LocalDateTime(s)
+						if err != nil {
+							return err
+						}
+						if !compose.InFuture(local, p.plan.Project.Timezone, time.Now()) {
+							return errors.New("that time has passed")
+						}
+						return nil
+					}))
+			}},
+		}, false)
+		if err != nil {
 			return err
 		}
+		when = p.whenChoice
 		if when == "at" {
-			at := time.Now().Add(time.Hour).Format("2006-01-02 15:00")
-			if err := huh.NewInput().Title("Date and time ("+p.plan.Project.Timezone+")").Description("YYYY-MM-DD HH:MM").Value(&at).
-				Validate(func(s string) error {
-					local, err := compose.LocalDateTime(s)
-					if err != nil {
-						return err
-					}
-					if !compose.InFuture(local, p.plan.Project.Timezone, time.Now()) {
-						return errors.New("that time has passed")
-					}
-					return nil
-				}).Run(); err != nil {
-				return err
-			}
-			when = at
+			when = p.whenAt
 		}
 	}
 	switch when {
@@ -1125,7 +1774,9 @@ func (p *poster) chooseWhen(ctx context.Context, d *media.Defaults) error {
 			return err
 		}
 		p.plan.When = compose.When{Kind: "AT", At: strings.Replace(slot.LocalDateTime[:16], "T", " ", 1)}
-		p.env.printf("Next free slot: %s (%s)\n", bold.Render(p.plan.When.At), p.plan.Project.Timezone)
+		if !p.wizard {
+			p.env.printf("Next free slot: %s (%s)\n", bold.Render(p.plan.When.At), p.plan.Project.Timezone)
+		}
 	default:
 		if !p.me.Allows("SCHEDULE") {
 			return errors.New("this terminal may only save drafts")
@@ -1138,6 +1789,124 @@ func (p *poster) chooseWhen(ctx context.Context, d *media.Defaults) error {
 			return fmt.Errorf("%s has passed in %s", when, p.plan.Project.Timezone)
 		}
 		p.plan.When = compose.When{Kind: "AT", At: when}
+	}
+	return nil
+}
+
+func (p *poster) actionLabel() string {
+	switch p.plan.When.Kind {
+	case "AT":
+		return "Schedule it for " + p.plan.When.At + " (" + p.plan.Project.Timezone + ")"
+	case "NOW":
+		return "Publish now"
+	}
+	return "Save the draft"
+}
+
+// summary of the whole post, shown before anything is saved.
+func (p *poster) summary() string {
+	plan := p.plan
+	var b strings.Builder
+	fmt.Fprintf(&b, "Project %s", plan.Project.Name)
+	if n := len(p.files); n > 0 {
+		var names []string
+		for _, f := range p.files {
+			names = append(names, f.Name)
+		}
+		fmt.Fprintf(&b, " · %s: %s", plural(n, "file"), truncate(strings.Join(names, ", "), 70))
+	} else {
+		b.WriteString(" · text only")
+	}
+	if p.cover != nil {
+		fmt.Fprintf(&b, " · cover %s", p.cover.Name)
+	}
+	b.WriteString("\n")
+	for _, a := range plan.Accounts {
+		format := compose.FormatLabel[plan.FormatFor(a)]
+		if format == "" {
+			format = "?"
+		}
+		caption := "main caption"
+		if _, own := plan.Captions[a.AccountID]; own {
+			caption = "own caption"
+		}
+		extra := []string{plural(len(plan.FilesFor(a.AccountID)), "file"), caption}
+		if plan.AIFor(a.AccountID) && compose.AILabelSupported(a.Platform, plan.TikTok[a.AccountID].Draft) {
+			extra = append(extra, "AI label")
+		}
+		if c, ok := plan.TikTok[a.AccountID]; ok && c.Draft {
+			extra = append(extra, "TikTok inbox draft")
+		}
+		fmt.Fprintf(&b, "  %-34s %-11s %s\n", truncate(accountLabel(a), 34), format, faint.Render(strings.Join(extra, " · ")))
+	}
+	if c := strings.TrimSpace(plan.Caption); c != "" {
+		fmt.Fprintf(&b, "Caption: %s\n", faint.Render(truncate(strings.ReplaceAll(c, "\n", " "), 90)))
+	}
+	if len(plan.Hashtags) > 0 {
+		fmt.Fprintf(&b, "Hashtags: %s\n", faint.Render("#"+strings.Join(plan.Hashtags, " #")))
+	}
+	if over := p.tooLong(func(a api.ProjectAccount) string {
+		if c, ok := plan.Captions[a.AccountID]; ok {
+			return c
+		}
+		return plan.Caption
+	}); len(over) > 0 {
+		for _, a := range plan.Accounts {
+			if l, ok := over[a.AccountID]; ok {
+				b.WriteString(yellow.Render("! "+l) + "\n")
+			}
+		}
+	}
+	if p.plan.When.Kind != "DRAFT" && p.tiktokDirect() {
+		b.WriteString(faint.Render("By posting to TikTok, you agree to TikTok's Music Usage Confirmation ("+compose.TikTokMusicUsageURL+")") + "\n")
+		if p.tiktokBranded() {
+			b.WriteString(faint.Render("and Branded Content Policy ("+compose.TikTokBrandedPolicyURL+")") + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (p *poster) tiktokDirect() bool {
+	for _, a := range p.plan.Accounts {
+		if c, ok := p.plan.TikTok[a.AccountID]; ok && !c.Draft {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *poster) tiktokBranded() bool {
+	for _, a := range p.plan.Accounts {
+		if c, ok := p.plan.TikTok[a.AccountID]; ok && !c.Draft && c.BrandContent {
+			return true
+		}
+	}
+	return false
+}
+
+// confirm: the last screen before anything is saved. Esc goes back to change something.
+func (p *poster) confirm() error {
+	if !p.wizard {
+		return nil
+	}
+	if probs := p.plan.Problems(); len(probs) > 0 {
+		p.env.printf("%s\n", red.Render("✗ "+strings.Join(probs, "\n  ")))
+		return errBack
+	}
+	choice := "go"
+	opts := []huh.Option[string]{huh.NewOption(p.actionLabel(), "go")}
+	if p.plan.When.Kind != "DRAFT" {
+		opts = append(opts, huh.NewOption("Save it as a draft instead", "draft"))
+	}
+	if err := p.ask.form(
+		huh.NewNote().Title("Review").Description(p.summary()),
+		huh.NewSelect[string]().Title("Ready?").Description("esc goes back to change anything").Options(opts...).Value(&choice),
+	); err != nil {
+		return err
+	}
+	if choice == "draft" {
+		p.plan.When = compose.When{Kind: "DRAFT"}
+		p.whenChoice = "draft"
 	}
 	return nil
 }
@@ -1168,32 +1937,22 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 		post = fresh
 	}
 	p.review(post, v)
-	tiktokDirect, branded := false, false
-	for _, a := range p.plan.Accounts {
-		if c, ok := p.plan.TikTok[a.AccountID]; ok && !c.Draft {
-			tiktokDirect = true
-			branded = branded || c.BrandContent
-		}
-	}
 	if v.ErrorCount > 0 {
 		e.printf("\n%s It's saved as a draft: fix it on the website (mktauto open %s) or change the files and try again.\n", red.Render("Can't publish yet."), post.ID)
 		p.remember(post, "draft")
 		return errSilent
 	}
-	action := map[string]string{"DRAFT": "Save the draft", "AT": "Schedule it for " + p.plan.When.At + " (" + p.plan.Project.Timezone + ")", "NOW": "Publish now"}[p.plan.When.Kind]
-	if p.plan.When.Kind != "DRAFT" && tiktokDirect {
+	if !p.wizard && p.plan.When.Kind != "DRAFT" && p.tiktokDirect() {
 		e.printf("\nBy posting to TikTok, you agree to TikTok's Music Usage Confirmation (%s)", faint.Render(compose.TikTokMusicUsageURL))
-		if branded {
+		if p.tiktokBranded() {
 			e.printf(" and Branded Content Policy (%s)", faint.Render(compose.TikTokBrandedPolicyURL))
 		}
 		e.printf(".\n")
 	}
-	if p.wizard && !p.f.yes && p.plan.When.Kind != "DRAFT" {
+	// The wizard already asked; ask again only when the server found something worth a look.
+	if p.wizard && !p.f.yes && p.plan.When.Kind != "DRAFT" && hasWarnings(v) {
 		ok := true
-		if err := huh.NewConfirm().Title(action+"?").Affirmative("Yes").Negative("No, keep it as a draft").Value(&ok).Run(); err != nil {
-			return err
-		}
-		if !ok {
+		if err := huh.NewConfirm().Title(p.actionLabel() + " despite the warnings above?").Affirmative("Yes").Negative("No, keep it as a draft").Value(&ok).Run(); err != nil || !ok {
 			p.plan.When.Kind = "DRAFT"
 		}
 	}
@@ -1238,6 +1997,15 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 		return enc.Encode(result)
 	}
 	return nil
+}
+
+func hasWarnings(v *api.Validation) bool {
+	for _, d := range v.Destinations {
+		if len(d.Issues) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *poster) review(post *api.Post, v *api.Validation) {
@@ -1351,4 +2119,3 @@ func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	return line
 }
-

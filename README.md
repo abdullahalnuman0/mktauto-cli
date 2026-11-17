@@ -35,6 +35,17 @@ cd ~/Pictures/launch     # a folder with images or videos
 mktauto                  # menu → "Post from this folder"
 ```
 
+The wizard asks, in this order: project → **what you're posting** (images, a video, images and videos together, or
+text only) → the files (with their order) → the accounts (only those that can post that content are listed, and
+they're ticked for you) → files used before → video cover → which files go to which account → caption, hashtags,
+link, first comment, "made with AI" → a different caption for some accounts (each starts empty, from a copy of the
+main caption, or keeps what you wrote) → TikTok / YouTube / Pinterest settings → when → a review of the whole post.
+
+- **Esc** goes back to the previous question, with your answers kept; **Ctrl+C** cancels. Nothing is saved until
+  you confirm on the review screen.
+- Files already posted from the folder are marked; captions show their length against each platform's limit
+  (X 280, Threads 500, Instagram and TikTok 2,200…) and an account whose caption is too long is offered its own.
+
 Everything can also run without questions, e.g. from a script:
 
 ```sh

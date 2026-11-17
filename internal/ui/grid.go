@@ -26,6 +26,7 @@ type gridModel struct {
 	r, c    int
 	done    bool
 	cancel  bool
+	back    bool
 	reorder int // column to reorder, -1 none
 }
 
@@ -88,7 +89,10 @@ func (m gridModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.done = true
 		return m, tea.Quit
-	case "esc", "ctrl+c", "q":
+	case "esc":
+		m.back = true
+		return m, tea.Quit
+	case "ctrl+c":
 		m.cancel = true
 		return m, tea.Quit
 	}
@@ -104,7 +108,7 @@ func pad(s string, w int) string {
 }
 
 func (m gridModel) View() string {
-	if m.done || m.cancel || m.reorder >= 0 {
+	if m.done || m.cancel || m.back || m.reorder >= 0 {
 		return ""
 	}
 	const nameW, colW = 26, 16
@@ -153,7 +157,7 @@ func (m gridModel) View() string {
 		}
 		b.WriteString(s + " ")
 	}
-	b.WriteString("\n" + help.Render("←/→ account · ↑/↓ file · space tick · a all/none · f first only · r whole row · o order for this account · enter done") + "\n")
+	b.WriteString("\n" + help.Render("←/→ account · ↑/↓ file · space tick · a all/none · f first only · r whole row · o order for this account · enter done · esc back") + "\n")
 	return b.String()
 }
 
@@ -167,6 +171,9 @@ func Grid(rows []string, cols []Column, sel [][]bool, verdict func(col int, rows
 	out := res.(gridModel)
 	if out.cancel {
 		return -1, ErrCancelled
+	}
+	if out.back {
+		return -1, ErrBack
 	}
 	return out.reorder, nil
 }

@@ -2,7 +2,13 @@
 // (web/src/lib/compose.ts, covers.ts, tiktok.ts); the server re-checks everything and stays the authority.
 package compose
 
-import "github.com/abdullahalnuman0/mktauto-cli/internal/api"
+import (
+	"fmt"
+	"regexp"
+	"unicode/utf8"
+
+	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
+)
 
 // PlatformLabel names platforms the way the website does.
 var PlatformLabel = map[string]string{
@@ -184,4 +190,57 @@ func AILabelSupported(platform string, tiktokDraft bool) bool {
 		return true
 	}
 	return false
+}
+
+// ------------------------------------------------------------------ limits (mirror of web SPECS / backend PlatformRules)
+
+type spec struct{ maxFiles, maxText int }
+
+const fbText = 63_206
+
+var specs = map[string]map[string]spec{
+	"FACEBOOK_PAGE":    {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {10, fbText}, "VIDEO": {1, fbText}, "REEL": {1, fbText}},
+	"INSTAGRAM":        {"IMAGE": {1, 2200}, "CAROUSEL": {20, 2200}, "REEL": {1, 2200}, "STORY": {1, 0}},
+	"THREADS":          {"TEXT": {0, 500}, "IMAGE": {1, 500}, "VIDEO": {1, 500}, "CAROUSEL": {20, 500}},
+	"X":                {"TEXT": {0, 280}, "IMAGE": {4, 280}, "VIDEO": {1, 280}},
+	"PINTEREST":        {"PIN": {1, 500}},
+	"TIKTOK":           {"VIDEO": {1, 2200}, "PHOTO_POST": {35, 4000}},
+	"YOUTUBE":          {"VIDEO": {1, 5000}, "SHORT": {1, 5000}},
+	"FACEBOOK_GROUP":   {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {30, fbText}, "VIDEO": {1, fbText}},
+	"FACEBOOK_PROFILE": {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {30, fbText}, "VIDEO": {1, fbText}},
+}
+
+// MaxText is the longest text the platform takes in this format (0 = none or unknown).
+func MaxText(platform, format string) int { return specs[platform][format].maxText }
+
+// Fit is the format a platform gets for these files, or "" and the reason it can't post them (too many files too).
+func Fit(platform string, files []api.Media) (format, reason string) {
+	f := AutoFormat(platform, files)
+	if f == "" {
+		return "", CantPostReason(platform, files)
+	}
+	if s, ok := specs[platform][f]; ok && len(files) > s.maxFiles {
+		return "", fmt.Sprintf("%s takes up to %d files", PlatformLabel[platform], s.maxFiles)
+	}
+	return f, ""
+}
+
+var trackedLink = regexp.MustCompile(`https?://[^\s/]+/l/[A-Za-z0-9]{7}(?:[^A-Za-z0-9-]|$)`)
+
+// TextLength counts characters the way the platform does (web textLength): code points; Threads counts emoji by
+// their UTF-8 bytes; tracked short links gain a 2-character tag when published.
+func TextLength(platform, text string) int {
+	n := 2 * len(trackedLink.FindAllStringIndex(text, -1))
+	for _, r := range text {
+		if platform == "THREADS" && emojiLike(r) {
+			n += utf8.RuneLen(r)
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+func emojiLike(r rune) bool {
+	return (r >= 0x1F000 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF) || r == 0x200D || r == 0xFE0F
 }

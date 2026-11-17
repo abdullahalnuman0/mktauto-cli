@@ -10,8 +10,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// ErrCancelled: the user pressed Esc / Ctrl+C.
+// ErrCancelled: the user pressed Ctrl+C.
 var ErrCancelled = errors.New("cancelled")
+
+// ErrBack: the user pressed Esc (back to the previous step).
+var ErrBack = errors.New("back")
 
 var (
 	title   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63"))
@@ -29,6 +32,7 @@ type orderModel struct {
 	cursor  int
 	done    bool
 	cancel  bool
+	back    bool
 }
 
 func (m orderModel) Init() tea.Cmd { return nil }
@@ -67,7 +71,10 @@ func (m orderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.done = true
 		return m, tea.Quit
-	case "esc", "ctrl+c", "q":
+	case "esc":
+		m.back = true
+		return m, tea.Quit
+	case "ctrl+c":
 		m.cancel = true
 		return m, tea.Quit
 	}
@@ -75,7 +82,7 @@ func (m orderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m orderModel) View() string {
-	if m.done || m.cancel {
+	if m.done || m.cancel || m.back {
 		return ""
 	}
 	var b strings.Builder
@@ -89,7 +96,7 @@ func (m orderModel) View() string {
 		}
 		b.WriteString(line + "\n")
 	}
-	b.WriteString(help.Render("↑/↓ choose · u/d (or shift+↑/↓) move · t to top · enter done · esc cancel") + "\n")
+	b.WriteString(help.Render("↑/↓ choose · u/d (or shift+↑/↓) move · t to top · enter done · esc back") + "\n")
 	return b.String()
 }
 
@@ -109,6 +116,9 @@ func Order(heading string, labels []string) ([]int, error) {
 	out := res.(orderModel)
 	if out.cancel {
 		return nil, ErrCancelled
+	}
+	if out.back {
+		return nil, ErrBack
 	}
 	return out.order, nil
 }
