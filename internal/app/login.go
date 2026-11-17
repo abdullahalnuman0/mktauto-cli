@@ -10,6 +10,7 @@ import (
 
 	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/auth"
+	"github.com/abdullahalnuman0/mktauto-cli/internal/ui"
 	"github.com/charmbracelet/huh"
 )
 
@@ -77,6 +78,15 @@ func (e *Env) browserLogin(ctx context.Context, c *api.Client, device api.Device
 		return nil, err
 	}
 	e.printf("\nYour code: %s\n", brand.Render(start.UserCode))
+	if e.Interactive {
+		// Approving on a phone: its camera opens the same page; the MKTAuto app scans it in Terminal access.
+		if q, w, err := ui.QR(start.VerificationURLComplete); err == nil && e.width() >= w+4 {
+			e.printf("%s\n", faint.Render("Approve on your phone: scan this with the camera or in the MKTAuto app (Terminal access → Scan)"))
+			for _, line := range strings.Split(strings.TrimRight(q, "\n"), "\n") {
+				e.printf("  %s\n", line)
+			}
+		}
+	}
 	opened := !noBrowser && auth.OpenBrowser(start.VerificationURLComplete)
 	if opened {
 		e.printf("A browser window opened. Check that it shows the same code, then approve.\n")

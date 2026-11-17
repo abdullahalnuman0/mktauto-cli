@@ -15,7 +15,9 @@ import (
 	"github.com/abdullahalnuman0/mktauto-cli/internal/compose"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/history"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/media"
+	"github.com/abdullahalnuman0/mktauto-cli/internal/ui"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/x/term"
 )
 
 func (e *Env) whoami(ctx context.Context) error {
@@ -48,8 +50,14 @@ func (e *Env) menu(ctx context.Context) error {
 		fmt.Fprint(e.Out, usage)
 		return nil
 	}
-	if _, err := e.token(); err != nil {
-		e.printf("%s\n\n", brand.Render("mktauto")+faint.Render(" · not signed in yet"))
+	tagline := "  Post from a folder to all your social accounts · " + faint.Render("v"+strings.TrimPrefix(e.Version, "v"))
+	_, tokErr := e.token()
+	if tokErr != nil {
+		tagline += faint.Render(" · not signed in yet")
+	}
+	ui.Banner(tagline, e.width(), e.animate())
+	e.printf("\n")
+	if tokErr != nil {
 		if err := e.login(ctx, nil); err != nil {
 			return err
 		}
@@ -63,7 +71,7 @@ func (e *Env) menu(ctx context.Context) error {
 		if len(files) == 0 {
 			postLabel = "Post (no images or videos in this folder: text only)"
 		}
-		err := huh.NewSelect[string]().Title("mktauto · "+shortPath(e.Dir)).Options(
+		err := huh.NewSelect[string]().Title("Folder "+shortPath(e.Dir)).Options(
 			huh.NewOption(postLabel, "post"),
 			huh.NewOption("Status of recent posts", "status"),
 			huh.NewOption("What was posted from this folder", "history"),
@@ -325,4 +333,18 @@ func (e *Env) doctor(ctx context.Context) error {
 		ok(fmt.Sprintf("This folder: %s that can be posted", plural(len(files), "file")))
 	}
 	return nil
+}
+
+// width of the terminal (0 when unknown).
+func (e *Env) width() int {
+	w, _, err := term.GetSize(os.Stdout.Fd())
+	if err != nil {
+		return 0
+	}
+	return w
+}
+
+// animate: moving pictures only in a real terminal, and never when asked not to.
+func (e *Env) animate() bool {
+	return e.Interactive && os.Getenv("MKTAUTO_NO_ANIMATION") == "" && os.Getenv("TERM") != "dumb"
 }

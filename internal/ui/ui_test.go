@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -68,5 +69,20 @@ func TestGridTicksFilesPerAccountAndShowsTheResult(t *testing.T) {
 	m, _ = m.Update(key("o"))
 	if m.(gridModel).reorder != 1 {
 		t.Error("o asks to reorder the current account's files")
+	}
+}
+
+func TestLogoAndQR(t *testing.T) {
+	for _, row := range logoRows() {
+		if len([]rune(row)) != LogoWidth {
+			t.Fatalf("logo rows must have the same width: %q", row)
+		}
+	}
+	if LogoWidth > 78 {
+		t.Errorf("the logo should fit an 80-column terminal: %d", LogoWidth)
+	}
+	q, w, err := QR("https://mktauto.site/cli/approve?code=BCDF-G7HK")
+	if err != nil || w < 25 || strings.Count(q, "\n") != (w+1)/2 {
+		t.Errorf("qr: %d columns, %d lines, %v", w, strings.Count(q, "\n"), err)
 	}
 }

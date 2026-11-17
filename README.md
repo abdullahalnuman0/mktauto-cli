@@ -35,6 +35,10 @@ cd ~/Pictures/launch     # a folder with images or videos
 mktauto                  # menu → "Post from this folder"
 ```
 
+`mktauto login` shows a short code and a QR code: approve in the browser that opens, or scan the QR code with your
+phone (its camera opens the approval page; the MKTAuto app scans it in Terminal access). `MKTAUTO_NO_ANIMATION=1`
+turns off the animated logo at the start.
+
 The wizard asks, in this order: project → **what you're posting** (images, a video, images and videos together, or
 text only) → the files (with their order) → the accounts (only those that can post that content are listed, and
 they're ticked for you) → files used before → video cover → which files go to which account → caption, hashtags,
