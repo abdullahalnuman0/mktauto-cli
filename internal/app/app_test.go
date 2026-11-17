@@ -183,6 +183,7 @@ func runCLI(t *testing.T, dir string, args ...string) (int, string) {
 	os.Stdout, os.Stderr = out, out
 	code := Run(args, "1.0.0-test")
 	os.Stdout, os.Stderr = stdout, stderr
+	out.Close() // Windows can't delete the test's temp folder while the file is open
 	data, _ := os.ReadFile(out.Name())
 	return code, string(data)
 }
