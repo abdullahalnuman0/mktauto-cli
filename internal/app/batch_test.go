@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
 )
 
 func login(t *testing.T, dir string) {
@@ -159,5 +162,57 @@ func TestAICommandAndPostsList(t *testing.T) {
 	runCLI(t, dir, "post", "--project", "Memoshot", "--accounts", "facebook", "--caption", "Listed")
 	if code, out := runCLI(t, dir, "posts", "--json"); code != 0 || !strings.Contains(out, `"baseCaption": "Listed"`) {
 		t.Errorf("posts --json: %s", out)
+	}
+}
+
+// New files dropped into the folder become posts once fully copied; files there before are left alone.
+func TestWatchPostsNewFiles(t *testing.T) {
+	f, dir := setup(t)
+	login(t, dir)
+	t.Chdir(dir)
+	e, err := newEnv("1.0.0-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Server, e.Dir, e.Interactive = os.Getenv("MKTAUTO_SERVER"), dir, false
+	var out strings.Builder
+	e.Out = &out
+	c, _ := e.client()
+	me, err := e.me(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accs, _ := c.ProjectAccounts(context.Background(), "p1")
+	b := &batcher{env: e, c: c, me: me, ask: newAsker(), watch: true, each: "image", whenMode: "draft",
+		f: postFlags{accounts: "facebook", caption: "New: {name}"}, project: api.Project{ID: "p1", Name: "Memoshot", Timezone: "Asia/Dhaka"}, accounts: accs}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- b.loop(ctx, 60*time.Millisecond, false) }()
+	time.Sleep(150 * time.Millisecond)
+	data, _ := os.ReadFile(filepath.Join(dir, "a.png"))
+	_ = os.WriteFile(filepath.Join(dir, "fresh.png"), data, 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "clip.mp4"), []byte("not an image: --each image"), 0o600)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		n := len(f.posts)
+		f.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.posts) != 1 || f.posts[0]["baseCaption"] != "New: fresh" {
+		t.Errorf("one post for fresh.png: %v\n%s", f.posts, out.String())
+	}
+	if !strings.Contains(out.String(), "Watching") || !strings.Contains(out.String(), "fresh.png") {
+		t.Errorf("output: %s", out.String())
 	}
 }

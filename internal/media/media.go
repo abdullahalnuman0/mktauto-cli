@@ -27,14 +27,15 @@ var Types = map[string]string{
 
 // File is one postable file in the folder.
 type File struct {
-	Path   string // absolute
-	Name   string // file name
-	Mime   string
-	Kind   string // IMAGE or VIDEO
-	Size   int64
-	Width  int // images only (videos: measured by the server after upload)
-	Height int
-	SHA256 string // hex, filled by Fingerprint
+	Path       string // absolute
+	Name       string // file name
+	Mime       string
+	Kind       string // IMAGE or VIDEO
+	Size       int64
+	Width      int // images; videos when ffprobe measured them (else the server measures after upload)
+	Height     int
+	DurationMs int    // videos measured by ffprobe
+	SHA256     string // hex, filled by Fingerprint
 }
 
 func (f File) IsVideo() bool { return f.Kind == "VIDEO" }
@@ -159,3 +160,5 @@ func digits(s string) string {
 	}
 	return s[:i]
 }
+
+func envSet(name string) bool { return os.Getenv(name) != "" }

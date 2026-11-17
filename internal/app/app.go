@@ -24,12 +24,14 @@ import (
 type Env struct {
 	Version     string
 	Out, Err    io.Writer
+	Data        io.Writer // --json data: os.Stdout (also with --quiet), a buffer for mktauto mcp
 	In          *os.File
 	Interactive bool
 	Config      *auth.Config
 	Store       auth.TokenStore
 	Server      string
 	Dir         string // the folder mktauto runs in
+	mcpLevel    int    // mktauto mcp --allow (0 read … 3 publish)
 }
 
 var (
@@ -51,6 +53,8 @@ Usage:
   mktauto post [flags]       post files from this folder (no flags: step by step; -h lists every flag)
   mktauto batch              one post per file or subfolder, in the next free posting times (or drafts)
   mktauto import FILE.csv    one post per spreadsheet row (--example prints one)
+  mktauto watch              keeps running: each new file dropped here becomes a post
+  mktauto preset save NAME   save post flags (project, accounts, hashtags…) to use anywhere with --preset NAME
 
 Find what to post to:
   mktauto projects           projects this terminal may post to
@@ -62,6 +66,7 @@ Saved posts (POST = an id, its first characters as status shows them, or "last")
   mktauto calendar           what's planned, day by day, with the free posting times
   mktauto stats [POST]       results: reach, likes, comments… (--links: clicks on tracked links)
   mktauto inbox              failures, posts to finish yourself, approvals
+  mktauto best-times         when your posts did best, by day and time (a suggestion from your own results)
   mktauto status [POST]      recent posts, or one post's accounts
   mktauto edit POST          change caption, hashtags, link or name (--caption, --hashtags, --link, --name)
   mktauto schedule POST      schedule or move it (--at "YYYY-MM-DD HH:MM" or --next-slot)
@@ -85,10 +90,12 @@ This computer:
   mktauto doctor             check the connection and this installation
   mktauto update             install the latest version (--version vX.Y.Z for another one)
   mktauto completion SHELL   tab completion for bash, zsh, fish or powershell
+  mktauto mcp                connect AI assistants (Claude…): --allow read|drafts|schedule|publish
   mktauto version
 
-Global: --server URL (or MKTAUTO_SERVER) to use another MKTAuto server. Most commands take --json.
-Run "mktauto <command> -h" for a command's flags. More: https://mktauto.site/download
+Global (before the command): --server URL (or MKTAUTO_SERVER) another MKTAuto server · --quiet (-q) only errors and
+--json output · --no-color (or NO_COLOR=1). Most commands take --json.
+` + exitCodesHelp + `Run "mktauto <command> -h" for a command's flags. More: https://mktauto.site/download
 `
 
 // Run executes the command line and returns the exit code.
@@ -100,16 +107,28 @@ func Run(args []string, version string) int {
 		fmt.Fprintln(os.Stderr, "mktauto:", err)
 		return 1
 	}
-	// --server may come before the command.
-	server := ""
-	for len(args) > 0 && strings.HasPrefix(args[0], "--server") {
-		if v, ok := strings.CutPrefix(args[0], "--server="); ok {
-			server, args = v, args[1:]
-		} else if len(args) > 1 {
-			server, args = args[1], args[2:]
-		} else {
+	// Global flags come before the command: --server URL, --quiet (-q), --no-color.
+	server, quiet := "", false
+loop:
+	for len(args) > 0 {
+		switch a := args[0]; {
+		case a == "--quiet" || a == "-q":
+			quiet, args = true, args[1:]
+		case a == "--no-color":
+			_ = os.Setenv("NO_COLOR", "1") // lipgloss reads it before the first coloured text
 			args = args[1:]
+		case strings.HasPrefix(a, "--server="):
+			server, args = strings.TrimPrefix(a, "--server="), args[1:]
+		case a == "--server" && len(args) > 1:
+			server, args = args[1], args[2:]
+		case a == "--server":
+			args = args[1:]
+		default:
+			break loop
 		}
+	}
+	if quiet {
+		env.Out = io.Discard // messages; --json output and errors still show
 	}
 	env.Server = api.NormalizeServer(env.Config.ServerURL(server))
 	cmd := ""
@@ -121,11 +140,11 @@ func Run(args []string, version string) int {
 	}
 	var notice <-chan string
 	if cmd != "update" && cmd != "version" && cmd != "--version" && cmd != "-v" && cmd != "help" && cmd != "-h" && cmd != "--help" &&
-		cmd != "__complete" && cmd != "completion" {
+		cmd != "__complete" && cmd != "completion" && cmd != "mcp" {
 		notice = env.noticeUpdate(ctx)
 	}
 	err = env.dispatch(ctx, cmd, args)
-	if notice != nil {
+	if notice != nil && !quiet {
 		select {
 		case n, ok := <-notice:
 			if ok && n != "" {
@@ -134,22 +153,18 @@ func Run(args []string, version string) int {
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
+	code := exitCode(err)
 	switch {
-	case err == nil:
-		return 0
-	case errors.Is(err, flag.ErrHelp):
-		return 0
+	case err == nil, errors.Is(err, flag.ErrHelp):
 	case errors.Is(err, context.Canceled):
 		fmt.Fprintln(env.Err, faint.Render("Stopped."))
-		return 130
 	case errors.Is(err, errSilent):
-		return 1
 	case errors.Is(err, errBack), errors.Is(err, huh.ErrUserAborted):
 		fmt.Fprintln(env.Err, faint.Render("Cancelled: nothing was saved."))
-		return 130
+	default:
+		fmt.Fprintln(env.Err, red.Render("✗ ")+err.Error())
 	}
-	fmt.Fprintln(env.Err, red.Render("✗ ")+err.Error())
-	return 1
+	return code
 }
 
 func newEnv(version string) (*Env, error) {
@@ -162,7 +177,7 @@ func newEnv(version string) (*Env, error) {
 		return nil, err
 	}
 	interactive := term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) && os.Getenv("MKTAUTO_NO_TUI") == ""
-	return &Env{Version: version, Out: os.Stdout, Err: os.Stderr, In: os.Stdin, Interactive: interactive, Config: cfg,
+	return &Env{Version: version, Out: os.Stdout, Data: os.Stdout, Err: os.Stderr, In: os.Stdin, Interactive: interactive, Config: cfg,
 		Store: auth.NewTokenStore(), Dir: dir}, nil
 }
 
@@ -224,6 +239,14 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.stopRepeat(ctx, args)
 	case "completion":
 		return e.completion(args)
+	case "watch":
+		return e.watch(ctx, args)
+	case "mcp":
+		return e.mcp(ctx, args)
+	case "best-times", "besttimes":
+		return e.bestTimes(ctx, args)
+	case "preset", "presets":
+		return e.preset(args)
 	case "__complete":
 		return e.completeCommand(ctx, args)
 	case "import":
@@ -253,7 +276,7 @@ func (e *Env) token() (string, error) {
 func (e *Env) client() (*api.Client, error) {
 	t, err := e.token()
 	if err != nil || t == "" {
-		return nil, fmt.Errorf("not signed in to %s: run `mktauto login`", e.Server)
+		return nil, withCode(exitAuth, fmt.Errorf("not signed in to %s: run `mktauto login`", e.Server))
 	}
 	return api.New(e.Server, t, e.Version), nil
 }
@@ -268,7 +291,7 @@ func (e *Env) me(ctx context.Context, c *api.Client) (*api.Me, error) {
 		if os.Getenv("MKTAUTO_TOKEN") == "" {
 			_ = e.Store.Delete(e.Server)
 		}
-		return nil, errors.New("this terminal was signed out (revoked or expired). Run `mktauto login` to sign in again")
+		return nil, withCode(exitAuth, errors.New("this terminal was signed out (revoked or expired). Run `mktauto login` to sign in again"))
 	}
 	if api.IsProblem(err, 426, "") {
 		return nil, fmt.Errorf("%v", err)

@@ -105,6 +105,37 @@ mktauto stop-repeat 3f2a91c0
 The review screen (and `--dry-run`) shows the exact text each account gets, with the hashtags added and its length
 against the platform's limit.
 
+### Watch a folder, best times, presets
+
+```sh
+mktauto watch --project Memoshot --accounts instagram,tiktok --when next-slot --tiktok-privacy SELF_ONLY
+                                    # keeps running: each new file dropped here becomes a post
+mktauto best-times --platform instagram   # when your own posts did best, by day and time (a suggestion)
+mktauto preset save launch --project Memoshot --accounts group:Launch --hashtags "android apps" --when next-slot
+mktauto post --preset launch        # in a terminal: step by step with the preset filled in; anywhere, any folder
+```
+
+With FFmpeg installed (`ffprobe`), videos are measured before the upload: their length and shape pick Reel, Short or
+video, and a video too long or too short for an account is flagged before uploading (`MKTAUTO_NO_FFPROBE=1` skips it).
+
+### AI assistants (MCP)
+
+`mktauto mcp` lets AI assistants (Claude Desktop, Claude Code and other MCP clients) list projects, accounts and
+posts, read the calendar and results, write captions, and create drafts, through this computer's sign-in and its
+permissions. `--allow read|drafts|schedule|publish` sets how far they may go (default: drafts).
+
+```sh
+claude mcp add mktauto -- mktauto mcp --allow drafts      # Claude Code
+```
+
+Claude Desktop (`claude_desktop_config.json`): `"mcpServers": {"mktauto": {"command": "mktauto", "args": ["mcp", "--allow", "drafts"]}}`
+
+### Scripting
+
+`--quiet` (`-q`) prints only errors and `--json` data, `--no-color` (or `NO_COLOR=1`) plain text. Exit codes: 0 done ·
+1 failed · 2 wrong command line · 3 not signed in · 4 not allowed for this terminal · 5 the post can't be published as
+it is · 6 a limit was reached · 7 update mktauto · 130 cancelled.
+
 ### Tab completion
 
 ```sh

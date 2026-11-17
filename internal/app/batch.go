@@ -52,6 +52,10 @@ func (e *Env) batch(ctx context.Context, args []string) error {
 	includePosted := fs.Bool("include-posted", false, "also files already posted from this folder")
 	limit := fs.Int("limit", 0, "at most this many posts")
 	fs.Usage = func() { fmt.Fprint(e.Err, batchHelp) }
+	args, err := expandPreset(args)
+	if err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -78,6 +82,7 @@ type batcher struct {
 	includePosted            bool
 	limit                    int
 	interactive              bool
+	watch                    bool // mktauto watch: one post per new file, as it arrives
 	project                  api.Project
 	accounts                 []api.ProjectAccount
 	chosen                   []string // account ids
@@ -127,6 +132,9 @@ func (b *batcher) chooseEach() error {
 		if b.each == "" {
 			b.each = "file"
 		}
+		if b.watch && b.each == "folder" {
+			return withCode(exitUsage, errors.New("--each for watch: image, video or file"))
+		}
 		if !slices.Contains([]string{"image", "video", "file", "folder"}, b.each) {
 			return fmt.Errorf("--each %q: use image, video, file or folder", b.each)
 		}
@@ -145,8 +153,11 @@ func (b *batcher) chooseEach() error {
 	if images > 0 && videos > 0 {
 		opts = append(opts, huh.NewOption(fmt.Sprintf("Each image and video  (%d)", images+videos), "file"))
 	}
-	if folders > 0 {
+	if folders > 0 && !b.watch {
 		opts = append(opts, huh.NewOption(fmt.Sprintf("Each subfolder as one post: its files together, caption.txt as the caption  (%d)", folders), "folder"))
+	}
+	if len(opts) == 0 && b.watch {
+		opts = []huh.Option[string]{huh.NewOption("Each new image or video", "file"), huh.NewOption("Each new image", "image"), huh.NewOption("Each new video", "video")}
 	}
 	if len(opts) == 0 {
 		return errors.New("nothing here to post: no images, videos or subfolders with them")
@@ -252,6 +263,9 @@ func (b *batcher) chooseAccounts(ctx context.Context) error {
 }
 
 func (b *batcher) chooseWhen() error {
+	if b.watch {
+		return b.chooseWatchWhen()
+	}
 	if !b.interactive {
 		b.whenMode = strings.ToLower(firstNonEmpty(b.f.when, "draft"))
 		if b.whenMode == "now" {
@@ -333,32 +347,15 @@ func (b *batcher) plan(ctx context.Context) error {
 	b.items = nil
 	posted := postedHere(e.Dir)
 	add := func(dir string, files []media.File, name string) {
-		it := batchItem{dir: dir, files: files, f: b.f}
-		names := make([]string, len(files))
-		for i, f := range files {
-			names[i] = f.Name
-			if posted[f.Name] == "posted" && !b.includePosted && dir == e.Dir {
-				it.note = "posted before (--include-posted to post it again)"
-			}
-		}
-		it.f.files = strings.Join(names, ",")
-		it.f.project = b.project.ID
-		if b.interactive {
-			it.f.accounts = strings.Join(b.chosen, ",")
-		}
-		// Its own .txt wins over the shared caption.
-		if c := media.SidecarCaption(files[0]); c != "" && it.f.captionFile == "" {
-			it.f.caption = c
-		} else if c := firstNonEmpty(b.caption, b.f.caption); c != "" {
-			it.f.caption = strings.ReplaceAll(c, "{name}", name)
-		}
-		b.items = append(b.items, it)
+		b.items = append(b.items, b.makeItem(posted, dir, files, name))
 	}
 	all, _ := media.Scan(e.Dir)
+	media.ProbeAll(all)
 	switch b.each {
 	case "folder":
 		for _, dir := range subfolders(e.Dir) {
 			files, _ := media.Scan(dir)
+			media.ProbeAll(files)
 			add(dir, files, filepath.Base(dir))
 		}
 	default:
@@ -386,6 +383,29 @@ func (b *batcher) plan(ctx context.Context) error {
 		return err
 	}
 	return confirmPlan(e, b.ask, b.project, b.items, b.f.yes || b.f.dryRun)
+}
+
+// makeItem: one post for these files, with the shared settings (its own .txt wins over the shared caption).
+func (b *batcher) makeItem(posted map[string]string, dir string, files []media.File, name string) batchItem {
+	it := batchItem{dir: dir, files: files, f: b.f}
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.Name
+		if posted[f.Name] == "posted" && !b.includePosted && dir == b.env.Dir {
+			it.note = "posted before (--include-posted to post it again)"
+		}
+	}
+	it.f.files = strings.Join(names, ",")
+	it.f.project = b.project.ID
+	if b.interactive {
+		it.f.accounts = strings.Join(b.chosen, ",")
+	}
+	if c := media.SidecarCaption(files[0]); c != "" && it.f.captionFile == "" {
+		it.f.caption = c
+	} else if c := firstNonEmpty(b.caption, b.f.caption); c != "" {
+		it.f.caption = strings.ReplaceAll(c, "{name}", name)
+	}
+	return it
 }
 
 // checkAccounts: per post, the accounts that can take its files (the others are left out of that post).
@@ -434,7 +454,7 @@ func assignTimes(ctx context.Context, c *api.Client, me *api.Me, project api.Pro
 		return nil
 	case "next-slot":
 		if !me.Allows("SCHEDULE") {
-			return errors.New("this terminal may only save drafts")
+			return withCode(exitNotAllowed, errors.New("this terminal may only save drafts"))
 		}
 		slots, err := c.NextSlots(ctx, project.ID, min(len(todo), 50))
 		if err != nil {
@@ -449,7 +469,7 @@ func assignTimes(ctx context.Context, c *api.Client, me *api.Me, project api.Pro
 		return nil
 	}
 	if !me.Allows("SCHEDULE") {
-		return errors.New("this terminal may only save drafts")
+		return withCode(exitNotAllowed, errors.New("this terminal may only save drafts"))
 	}
 	if mode != "every" {
 		start = mode
@@ -580,6 +600,10 @@ mktauto import --example prints an example.
 	var file string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		file, args = args[0], args[1:]
+	}
+	args, err := expandPreset(args)
+	if err != nil {
+		return err
 	}
 	if err := fs.Parse(args); err != nil {
 		return err

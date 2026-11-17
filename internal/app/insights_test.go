@@ -122,7 +122,7 @@ func TestCompletion(t *testing.T) {
 				t.Errorf("%s -h doesn't show -%s:\n%s", cmd, n, help)
 			}
 		}
-		if cmd == "batch" || cmd == "import" {
+		if cmd == "batch" || cmd == "import" || cmd == "watch" {
 			continue // their help lists mktauto post's flags too
 		}
 		for _, line := range strings.Split(help, "\n") {
@@ -149,4 +149,23 @@ func contains(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func TestBestTimesScoring(t *testing.T) {
+	mon10 := time.Date(2026, 11, 16, 10, 30, 0, 0, time.Local) // a Monday
+	tue19 := time.Date(2026, 11, 17, 19, 0, 0, 0, time.Local)
+	res := []timedResult{{mon10, 10, "X"}, {mon10.Add(7 * 24 * time.Hour), 30, "X"}, {tue19, 100, "X"}, {tue19.Add(7 * 24 * time.Hour), 60, "X"}}
+	s := scoreSlots(res)
+	mon, tue := s[[2]int{0, 3}], s[[2]int{1, 6}]
+	if mon == nil || tue == nil || mon.n != 2 || mon.avg() != 20 || tue.avg() != 80 || blockLabel(6) != "18–21" {
+		t.Errorf("slots: %+v %+v", mon, tue)
+	}
+	if engagement(map[string]int64{"likes": 1, "comments": 1, "shares": 1, "saves": 1, "clicks": 1, "views": 100}) != 9 {
+		t.Error("weights")
+	}
+	_, dir := setup(t)
+	login(t, dir)
+	if code, out := runCLI(t, dir, "best-times"); code == 0 || !strings.Contains(out, "not enough results") {
+		t.Errorf("no posts yet: %d %s", code, out)
+	}
 }

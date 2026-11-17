@@ -194,20 +194,23 @@ func AILabelSupported(platform string, tiktokDraft bool) bool {
 
 // ------------------------------------------------------------------ limits (mirror of web SPECS / backend PlatformRules)
 
-type spec struct{ maxFiles, maxText int }
+type spec struct{ maxFiles, maxText, minS, maxS int }
 
 const fbText = 63_206
 
 var specs = map[string]map[string]spec{
-	"FACEBOOK_PAGE":    {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {10, fbText}, "VIDEO": {1, fbText}, "REEL": {1, fbText}},
-	"INSTAGRAM":        {"IMAGE": {1, 2200}, "CAROUSEL": {20, 2200}, "REEL": {1, 2200}, "STORY": {1, 0}},
-	"THREADS":          {"TEXT": {0, 500}, "IMAGE": {1, 500}, "VIDEO": {1, 500}, "CAROUSEL": {20, 500}},
-	"X":                {"TEXT": {0, 280}, "IMAGE": {4, 280}, "VIDEO": {1, 280}},
-	"PINTEREST":        {"PIN": {1, 500}},
-	"TIKTOK":           {"VIDEO": {1, 2200}, "PHOTO_POST": {35, 4000}},
-	"YOUTUBE":          {"VIDEO": {1, 5000}, "SHORT": {1, 5000}},
-	"FACEBOOK_GROUP":   {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {30, fbText}, "VIDEO": {1, fbText}},
-	"FACEBOOK_PROFILE": {"TEXT": {0, fbText}, "IMAGE": {1, fbText}, "CAROUSEL": {30, fbText}, "VIDEO": {1, fbText}},
+	"FACEBOOK_PAGE": {"TEXT": {0, fbText, 0, 0}, "IMAGE": {1, fbText, 0, 0}, "CAROUSEL": {10, fbText, 0, 0}, "VIDEO": {1, fbText, 1, 4 * 3600},
+		"REEL": {1, fbText, 3, 90}},
+	"INSTAGRAM": {"IMAGE": {1, 2200, 0, 0}, "CAROUSEL": {20, 2200, 3, 60}, "REEL": {1, 2200, 3, 900}, "STORY": {1, 0, 3, 60}},
+	"THREADS":   {"TEXT": {0, 500, 0, 0}, "IMAGE": {1, 500, 0, 0}, "VIDEO": {1, 500, 1, 300}, "CAROUSEL": {20, 500, 1, 300}},
+	"X":         {"TEXT": {0, 280, 0, 0}, "IMAGE": {4, 280, 0, 0}, "VIDEO": {1, 280, 1, 1200}},
+	"PINTEREST": {"PIN": {1, 500, 4, 900}},
+	"TIKTOK":    {"VIDEO": {1, 2200, 3, 600}, "PHOTO_POST": {35, 4000, 0, 0}},
+	"YOUTUBE":   {"VIDEO": {1, 5000, 1, 12 * 3600}, "SHORT": {1, 5000, 1, 180}},
+	"FACEBOOK_GROUP": {"TEXT": {0, fbText, 0, 0}, "IMAGE": {1, fbText, 0, 0}, "CAROUSEL": {30, fbText, 0, 0},
+		"VIDEO": {1, fbText, 0, 0}},
+	"FACEBOOK_PROFILE": {"TEXT": {0, fbText, 0, 0}, "IMAGE": {1, fbText, 0, 0}, "CAROUSEL": {30, fbText, 0, 0},
+		"VIDEO": {1, fbText, 0, 0}},
 }
 
 // MaxText is the longest text the platform takes in this format (0 = none or unknown).
@@ -219,8 +222,20 @@ func Fit(platform string, files []api.Media) (format, reason string) {
 	if f == "" {
 		return "", CantPostReason(platform, files)
 	}
-	if s, ok := specs[platform][f]; ok && len(files) > s.maxFiles {
+	s, ok := specs[platform][f]
+	if ok && len(files) > s.maxFiles {
 		return "", fmt.Sprintf("%s takes up to %d files", PlatformLabel[platform], s.maxFiles)
+	}
+	// Video length, when it's known before the upload (ffprobe).
+	for _, m := range files {
+		if m.Kind != "VIDEO" || m.DurationMs <= 0 || !ok || s.maxS == 0 {
+			continue
+		}
+		secs := float64(m.DurationMs) / 1000
+		if secs < float64(s.minS) || secs > float64(s.maxS) {
+			return "", fmt.Sprintf("%s takes videos of %s to %s as a %s (this one is %s)", PlatformLabel[platform], clock(s.minS*1000),
+				clock(s.maxS*1000), FormatLabel[f], clock(m.DurationMs))
+		}
 	}
 	return f, ""
 }
@@ -244,3 +259,15 @@ func TextLength(platform, text string) int {
 func emojiLike(r rune) bool {
 	return (r >= 0x1F000 && r <= 0x1FAFF) || (r >= 0x2600 && r <= 0x27BF) || r == 0x200D || r == 0xFE0F
 }
+
+// clock: 75000 ms → "1:15", 3_600_000 → "1:00:00".
+func clock(ms int) string {
+	t := ms / 1000
+	if t >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", t/3600, t/60%60, t%60)
+	}
+	return fmt.Sprintf("%d:%02d", t/60, t%60)
+}
+
+// Clock is clock for other packages.
+func Clock(ms int) string { return clock(ms) }

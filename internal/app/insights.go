@@ -275,7 +275,7 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 	}
 	a, err := c.Analytics(ctx, *days, pid)
 	if api.IsProblem(err, 403, "cli_project") {
-		return errors.New("this terminal may only see some projects: add --project NAME")
+		return withCode(exitNotAllowed, errors.New("this terminal may only see some projects: add --project NAME"))
 	}
 	if err != nil {
 		return serverRefused(err)

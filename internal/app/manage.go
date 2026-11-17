@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"slices"
@@ -31,7 +32,7 @@ func (e *Env) flags(name, usageLine string) *flag.FlagSet {
 }
 
 func (e *Env) printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(e.dataOut())
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
@@ -593,3 +594,11 @@ func (e *Env) runPostAction(ctx context.Context, p *api.Post, key string) error 
 
 // managePosts: the menu's "Saved posts" is the posts dashboard.
 func (e *Env) managePosts(ctx context.Context) error { return e.posts(ctx, nil) }
+
+// dataOut: where --json data goes (the screen, also with --quiet; a buffer for mktauto mcp).
+func (e *Env) dataOut() io.Writer {
+	if e.Data != nil {
+		return e.Data
+	}
+	return os.Stdout
+}

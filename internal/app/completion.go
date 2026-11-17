@@ -29,13 +29,16 @@ var commandHelp = map[string]string{
 	"delete": "delete a draft", "duplicate": "copy a post", "stop-repeat": "stop a repeating post", "retry": "publish failed accounts again",
 	"open": "open on the website", "history": "what was posted from here", "projects": "list projects", "accounts": "list accounts",
 	"boards": "Pinterest boards", "ai": "AI caption help", "login": "sign in", "logout": "sign out", "whoami": "who am I",
-	"doctor": "check this installation", "update": "install the latest version", "version": "show the version", "completion": "tab completion script",
+	"doctor": "check this installation", "preset": "saved sets of post flags", "watch": "post new files as they arrive", "best-times": "when your posts did best", "mcp": "connect AI assistants", "update": "install the latest version", "version": "show the version", "completion": "tab completion script",
 }
 
 // commandFlags: each command's flags (post, batch and import add mktauto post's; a test keeps them in step).
 var commandFlags = map[string][]string{
 	"batch":       {"each", "every", "include-posted", "limit"},
 	"import":      {"example"},
+	"watch":       {"each", "interval", "existing"},
+	"best-times":  {"project", "platform", "days", "json"},
+	"mcp":         {"allow"},
 	"posts":       {"days", "status", "json"},
 	"calendar":    {"days", "project", "json"},
 	"stats":       {"days", "project", "refresh", "links", "json"},
@@ -75,7 +78,7 @@ func flagsFor(cmd string) []string {
 	switch cmd {
 	case "post":
 		return postFlagNames()
-	case "batch", "import":
+	case "batch", "import", "watch":
 		return append(postFlagNames(), commandFlags[cmd]...)
 	}
 	return commandFlags[cmd]
@@ -114,6 +117,10 @@ func (e *Env) complete(ctx context.Context, args []string) []candidate {
 	}
 	positional := len(args) == 2 || (len(args) > 2 && !strings.HasPrefix(prev, "-"))
 	switch {
+	case cmd == "preset" && len(args) == 2:
+		return filterPrefix([]candidate{{"save", ""}, {"list", ""}, {"show", ""}, {"delete", ""}}, cur)
+	case cmd == "preset" && len(args) == 3 && (args[1] == "show" || args[1] == "delete"):
+		return presetNames(cur)
 	case cmd == "completion" && len(args) == 2:
 		return filterPrefix([]candidate{{"bash", ""}, {"zsh", ""}, {"fish", ""}, {"powershell", ""}}, cur)
 	case cmd == "ai" && len(args) == 2:
@@ -140,6 +147,8 @@ func (e *Env) completeValue(ctx context.Context, cmd, flagName, cur string) ([]c
 		return e.remoteAccounts(ctx, "assign", cur, ""), true
 	case "template":
 		return e.remoteNames(ctx, "templates", cur), true
+	case "preset":
+		return presetNames(cur), true
 	case "hashtag-set":
 		return e.remoteNames(ctx, "sets", cur), true
 	case "files":
@@ -170,6 +179,8 @@ func (e *Env) completeValue(ctx context.Context, cmd, flagName, cur string) ([]c
 		return filterPrefix([]candidate{{"yours", "your own brand"}, {"partner", "branded content"}, {"yours,partner", ""}}, cur), true
 	case "tiktok-allow":
 		return filterPrefix([]candidate{{"comments", ""}, {"duet", ""}, {"stitch", ""}, {"comments,duet,stitch", ""}}, cur), true
+	case "allow":
+		return filterPrefix([]candidate{{"read", ""}, {"drafts", "default"}, {"schedule", ""}, {"publish", ""}}, cur), true
 	case "status":
 		return filterPrefix([]candidate{{"drafts", ""}, {"scheduled", ""}, {"published", ""}, {"problems", ""}}, cur), true
 	case "platform":
@@ -464,4 +475,13 @@ Tab completes commands, flags, your projects, accounts, groups, templates, files
 Then open a new terminal.
 `)
 	return errors.New("choose a shell")
+}
+
+func presetNames(cur string) []candidate {
+	all, _ := loadPresets()
+	var out []candidate
+	for n, flags := range all {
+		out = append(out, candidate{n, truncate(strings.Join(flags, " "), 60)})
+	}
+	return filterPrefix(out, cur)
 }

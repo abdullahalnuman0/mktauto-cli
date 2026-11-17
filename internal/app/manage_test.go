@@ -137,3 +137,62 @@ func TestPostHelpListsEveryFlag(t *testing.T) {
 		}
 	})
 }
+
+func TestPresets(t *testing.T) {
+	f, dir := setup(t)
+	runCLI(t, dir, "login", "--code", "mkl_good")
+	code, out := runCLI(t, dir, "preset", "save", "launch", "--project", "Memoshot", "--accounts", "facebook,instagram", "--hashtags", "android",
+		"--caption-for", "instagram=For IG", "--files", "a.png", "--yes")
+	if code != 0 || !strings.Contains(out, "Not saved") || !strings.Contains(out, "--files") {
+		t.Fatalf("save: %d %s", code, out)
+	}
+	if code, out := runCLI(t, dir, "preset", "list"); code != 0 || !strings.Contains(out, "launch") || !strings.Contains(out, "--caption-for=instagram=For IG") {
+		t.Errorf("list: %s", out)
+	}
+	// Used from the command line; a flag given here wins over the preset's.
+	code, out = runCLI(t, dir, "post", "--preset", "launch", "--files", "b.png", "--caption", "Hi", "--hashtags", "kotlin", "--yes")
+	if code != 0 {
+		t.Fatalf("post --preset: %d %s", code, out)
+	}
+	p := f.posts[0]
+	if len(p["destinations"].([]any)) != 2 || fmt.Sprint(p["baseHashtags"]) != "[kotlin]" {
+		t.Errorf("preset applied, hashtags overridden: %v", p)
+	}
+	if code, out := runCLI(t, dir, "post", "--preset", "nope", "--files", "b.png"); code == 0 || !strings.Contains(out, "no preset") {
+		t.Errorf("unknown preset: %s", out)
+	}
+	if code, _ := runCLI(t, dir, "preset", "delete", "launch"); code != 0 {
+		t.Error("delete")
+	}
+	if code, out := runCLI(t, dir, "preset", "list"); !strings.Contains(out, "No presets") || code != 0 {
+		t.Errorf("after delete: %s", out)
+	}
+}
+
+func TestExitCodes(t *testing.T) {
+	f, dir := setup(t)
+	if code, _ := runCLI(t, dir, "status"); code != exitAuth {
+		t.Errorf("not signed in: %d", code)
+	}
+	runCLI(t, dir, "login", "--code", "mkl_good")
+	if code, _ := runCLI(t, dir, "post", "--nope"); code != exitUsage {
+		t.Errorf("unknown flag: %d", code)
+	}
+	f.permission = "DRAFT"
+	if code, _ := runCLI(t, dir, "post", "--project", "Memoshot", "--accounts", "facebook", "--caption", "x", "--when", "now"); code != exitNotAllowed {
+		t.Errorf("not allowed: %d", code)
+	}
+	f.revoked = true
+	if code, _ := runCLI(t, dir, "whoami"); code != exitAuth {
+		t.Errorf("signed out: %d", code)
+	}
+	// --quiet: messages hidden, --json output kept.
+	f.revoked = false
+	runCLI(t, dir, "login", "--code", "mkl_good")
+	if code, out := runCLI(t, dir, "--quiet", "projects"); code != 0 || out != "" {
+		t.Errorf("quiet: %d %q", code, out)
+	}
+	if code, out := runCLI(t, dir, "-q", "projects", "--json"); code != 0 || !strings.Contains(out, `"Memoshot"`) {
+		t.Errorf("quiet --json: %d %q", code, out)
+	}
+}

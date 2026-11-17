@@ -46,6 +46,7 @@ type postFlags struct {
 	name, pinLink, tiktokBrand, tiktokDraftFor      string
 	template, hashtagSet                            string
 	repeat, repeatUntil                             string
+	preset                                          string
 	// ACCOUNT=value, repeatable: that account's own value (ADR-076)
 	captionFor, captionFileFor, titleFor, youtubePrivacyFor, boardFor, pinLinkFor multiFlag
 	tiktokPrivacyFor, tiktokAllowFor, tiktokBrandFor                              multiFlag
@@ -64,10 +65,16 @@ func (e *Env) post(ctx context.Context, args []string) error {
 	fs := newPostFlags(&f)
 	fs.SetOutput(e.Err)
 	fs.Usage = func() { fmt.Fprint(e.Err, postHelp) }
+	args, err := expandPreset(args)
+	if err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	flagMode := !e.Interactive || f.project != "" || f.accounts != "" || f.files != ""
+	// A preset without files in a terminal: the step-by-step wizard, with the preset's answers filled in.
+	wizardWithPreset := e.Interactive && f.preset != "" && f.files == "" && !f.dryRun
+	flagMode := !e.Interactive || f.files != "" || (!wizardWithPreset && (f.project != "" || f.accounts != ""))
 	if f.jsonOut {
 		e.Out = e.Err
 	}
@@ -102,6 +109,7 @@ func newPostFlags(f *postFlags) *flag.FlagSet {
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
 	fs.BoolVar(&f.yes, "yes", false, "don't ask for confirmation")
 	fs.BoolVar(&f.wait, "wait", false, "after publishing now, wait for the result")
+	fs.StringVar(&f.preset, "preset", "", "start from a saved preset (mktauto preset list); flags given here win")
 	fs.StringVar(&f.repeat, "repeat", "", "post it again every: daily, weekly, biweekly, monthly or N days (with a time)")
 	fs.StringVar(&f.repeatUntil, "repeat-until", "", "the last day of the repeats, YYYY-MM-DD (default: until stopped)")
 	fs.StringVar(&f.template, "template", "", "start from a template saved on the website (name or id)")
@@ -203,6 +211,7 @@ func (p *poster) run(ctx context.Context) error {
 	if p.all, err = media.Scan(e.Dir); err != nil {
 		return err
 	}
+	media.ProbeAll(p.all) // video length and shape before the upload, when ffprobe is installed
 	p.plan = compose.NewPlan()
 	p.tiktok = map[string]*api.TikTokCreatorInfo{}
 	p.dups, p.dupChoice, p.uploaded, p.ownCaption = map[string]api.Duplicate{}, map[string]string{}, map[string]api.Media{}, map[string]string{}
@@ -396,6 +405,9 @@ func (p *poster) chooseKind() error {
 
 func (p *poster) fileLabel(f media.File) string {
 	s := f.Name + "  " + faint.Render(humanize.Bytes(uint64(f.Size)))
+	if f.DurationMs > 0 {
+		s += faint.Render(" · " + compose.Clock(f.DurationMs))
+	}
 	if f.Width > 0 {
 		s += faint.Render(fmt.Sprintf(" · %d×%d", f.Width, f.Height))
 	}
@@ -420,12 +432,13 @@ func (p *poster) chooseFiles() error {
 			return nil
 		}
 		for _, name := range splitList(spec) {
-			f, ok := media.Describe(filepath.Join(p.env.Dir, name))
+			f, ok := media.Describe(filePath(p.env.Dir, name))
 			if !ok {
 				return fmt.Errorf("%s: not found, or not an image/video MKTAuto accepts (JPEG, PNG, WebP, GIF, MP4, MOV, WebM)", name)
 			}
 			p.picked = append(p.picked, f)
 		}
+		media.ProbeAll(p.picked)
 		return nil
 	}
 	var pool []media.File
@@ -543,7 +556,7 @@ func (p *poster) chooseFiles() error {
 func localMedia(files []media.File) []api.Media {
 	out := make([]api.Media, len(files))
 	for i, f := range files {
-		out[i] = api.Media{Kind: f.Kind, Width: f.Width, Height: f.Height, SizeBytes: f.Size}
+		out[i] = api.Media{Kind: f.Kind, Width: f.Width, Height: f.Height, SizeBytes: f.Size, DurationMs: f.DurationMs}
 	}
 	return out
 }
@@ -604,6 +617,15 @@ func (p *poster) chooseAccounts() error {
 	for _, a := range p.chosen {
 		pre[a.AccountID] = true
 	}
+	if len(pre) == 0 && p.f.accounts != "" { // from a preset
+		if terms, err := p.expandGroups(splitList(p.f.accounts)); err == nil {
+			if m, err := compose.MatchAccounts(terms, fit); err == nil {
+				for _, a := range m {
+					pre[a.AccountID] = true
+				}
+			}
+		}
+	}
 	if len(pre) == 0 && p.template != nil {
 		for _, id := range p.template.AccountIDs {
 			pre[id] = true
@@ -641,7 +663,7 @@ func (p *poster) chooseAccounts() error {
 	}
 	for _, a := range fit {
 		label := accountLabel(a)
-		if f, _ := compose.Fit(a.Platform, files); f != "" && !hasVideo {
+		if f, _ := compose.Fit(a.Platform, files); f != "" && (!hasVideo || videosMeasured(p.picked)) {
 			label += faint.Render(" → " + compose.FormatLabel[f])
 		}
 		opts = append(opts, huh.NewOption(label, a.AccountID).Selected(pre[a.AccountID]))
@@ -672,6 +694,16 @@ func (p *poster) chooseAccounts() error {
 		}
 	}
 	return nil
+}
+
+// videosMeasured: every video's length and shape are known (so its format is too).
+func videosMeasured(files []media.File) bool {
+	for _, f := range files {
+		if f.IsVideo() && f.DurationMs == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *poster) kindText() string {
@@ -1943,12 +1975,12 @@ func (p *poster) chooseWhen(ctx context.Context) error {
 		p.plan.When = compose.When{Kind: "DRAFT"}
 	case "now":
 		if !p.me.Allows("PUBLISH") {
-			return errors.New("this terminal may not publish now (create a login code that allows it, or schedule instead)")
+			return withCode(exitNotAllowed, errors.New("this terminal may not publish now (create a login code that allows it, or schedule instead)"))
 		}
 		p.plan.When = compose.When{Kind: "NOW"}
 	case "next-slot":
 		if !p.me.Allows("SCHEDULE") {
-			return errors.New("this terminal may only save drafts")
+			return withCode(exitNotAllowed, errors.New("this terminal may only save drafts"))
 		}
 		if p.f.dryRun {
 			p.plan.When = compose.When{Kind: "NEXT_SLOT"}
@@ -1964,7 +1996,7 @@ func (p *poster) chooseWhen(ctx context.Context) error {
 		}
 	default:
 		if !p.me.Allows("SCHEDULE") {
-			return errors.New("this terminal may only save drafts")
+			return withCode(exitNotAllowed, errors.New("this terminal may only save drafts"))
 		}
 		local, err := compose.LocalDateTime(when)
 		if err != nil {
@@ -2208,7 +2240,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 	if p.f.dryRun {
 		e.printf("%s\n\n", p.preview())
 		e.printf("%s Nothing was uploaded or saved. This is the post that would be sent:\n", yellow.Render("Dry run:"))
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(e.dataOut())
 		enc.SetIndent("", "  ")
 		return enc.Encode(in)
 	}
@@ -2227,7 +2259,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 	if v.ErrorCount > 0 {
 		e.printf("\n%s It's saved as a draft: fix it on the website (mktauto open %s) or change the files and try again.\n", red.Render("Can't publish yet."), post.ID)
 		p.remember(post, "draft")
-		return errSilent
+		return withCode(exitInvalid, errSilent)
 	}
 	if !p.wizard && p.plan.When.Kind != "DRAFT" && p.tiktokDirect() {
 		e.printf("\nBy posting to TikTok, you agree to TikTok's Music Usage Confirmation (%s)", faint.Render(compose.TikTokMusicUsageURL))
@@ -2280,7 +2312,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 		}
 	}
 	if p.f.jsonOut {
-		enc := json.NewEncoder(os.Stdout)
+		enc := json.NewEncoder(e.dataOut())
 		enc.SetIndent("", "  ")
 		return enc.Encode(result)
 	}
@@ -2446,6 +2478,7 @@ What and where
   --project NAME              project (name or id)
   --accounts A,B              accounts to post to (group:NAME = an account group saved on the website)
   --template NAME             start from a saved template (caption, hashtags, link, first comment, accounts)
+  --preset NAME               a set of these flags saved with mktauto preset save (flags given here win)
   --files a.png,b.mp4         files in posting order ("all" = every file; none = text only)
   --only ACCOUNT=1,3          that account gets only these files (positions in --files), in this order; repeatable
 
@@ -2497,3 +2530,11 @@ Examples
   mktauto post --project Memoshot --accounts youtube,tiktok --files reel.mp4 --title "Launch" \
     --youtube-privacy unlisted --tiktok-brand yours --tiktok-privacy PUBLIC_TO_EVERYONE --when now --wait
 `
+
+// filePath: an absolute path as it is, else relative to the folder.
+func filePath(dir, name string) string {
+	if filepath.IsAbs(name) {
+		return name
+	}
+	return filepath.Join(dir, name)
+}

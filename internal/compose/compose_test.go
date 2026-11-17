@@ -205,3 +205,27 @@ func TestFitAndTextLimits(t *testing.T) {
 		t.Errorf("tracked link gains 2: %d", n)
 	}
 }
+
+func TestVideoLengthKnownBeforeUpload(t *testing.T) {
+	vertical := func(sec int) []api.Media {
+		return []api.Media{{Kind: "VIDEO", Width: 1080, Height: 1920, DurationMs: sec * 1000}}
+	}
+	if f, why := Fit("INSTAGRAM", vertical(30)); f != "REEL" || why != "" {
+		t.Errorf("30 s reel: %q %q", f, why)
+	}
+	if f, _ := Fit("FACEBOOK_PAGE", vertical(120)); f != "VIDEO" {
+		t.Errorf("longer than a Facebook Reel → a normal video: %q", f)
+	}
+	if f, _ := Fit("YOUTUBE", vertical(60)); f != "SHORT" {
+		t.Errorf("a Short: %q", f)
+	}
+	if _, why := Fit("TIKTOK", vertical(700)); why != "TikTok takes videos of 0:03 to 10:00 as a Video (this one is 11:40)" {
+		t.Errorf("too long for TikTok: %q", why)
+	}
+	if _, why := Fit("INSTAGRAM", vertical(2)); why == "" {
+		t.Error("too short for a Reel")
+	}
+	if f, why := Fit("TIKTOK", []api.Media{{Kind: "VIDEO"}}); f != "VIDEO" || why != "" {
+		t.Errorf("length unknown: the server checks after upload: %q %q", f, why)
+	}
+}
