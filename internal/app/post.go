@@ -45,6 +45,7 @@ type postFlags struct {
 	dryRun, jsonOut, yes, wait                      bool
 	name, pinLink, tiktokBrand, tiktokDraftFor      string
 	template, hashtagSet                            string
+	repeat, repeatUntil                             string
 	// ACCOUNT=value, repeatable: that account's own value (ADR-076)
 	captionFor, captionFileFor, titleFor, youtubePrivacyFor, boardFor, pinLinkFor multiFlag
 	tiktokPrivacyFor, tiktokAllowFor, tiktokBrandFor                              multiFlag
@@ -101,6 +102,8 @@ func newPostFlags(f *postFlags) *flag.FlagSet {
 	fs.BoolVar(&f.jsonOut, "json", false, "print the saved post as JSON (messages go to stderr)")
 	fs.BoolVar(&f.yes, "yes", false, "don't ask for confirmation")
 	fs.BoolVar(&f.wait, "wait", false, "after publishing now, wait for the result")
+	fs.StringVar(&f.repeat, "repeat", "", "post it again every: daily, weekly, biweekly, monthly or N days (with a time)")
+	fs.StringVar(&f.repeatUntil, "repeat-until", "", "the last day of the repeats, YYYY-MM-DD (default: until stopped)")
 	fs.StringVar(&f.template, "template", "", "start from a template saved on the website (name or id)")
 	fs.StringVar(&f.hashtagSet, "hashtag-set", "", "add the hashtags of these saved sets (comma-separated names)")
 	fs.StringVar(&f.name, "name", "", "the post's internal name (only you see it; default: --title)")
@@ -141,30 +144,32 @@ type poster struct {
 	accFor   string               // project id projAcc belongs to
 
 	// Each step's own choices; kept when the user goes back so the questions show them again.
-	kind        string
-	picked      []media.File         // chosen files, in the post's order
-	listDraft   []media.File         // ticked in the file list (in order), before the order screen
-	chosen      []api.ProjectAccount // ticked accounts
-	files       []media.File         // picked minus files left out as duplicates
-	dups        map[string]api.Duplicate
-	dupChoice   map[string]string // sha256 → post / new-only / skip
-	cover       *media.File       // cover image (not posted as media)
-	coverChoice string            // none / frame / image
-	coverSecond string
-	coverImage  string               // path
-	uploaded    map[string]api.Media // path → stored media (not uploaded twice)
-	textsSet    bool
-	captionFrom string // file whose sidecar caption filled the caption
-	hashtags    string
-	ownCaption  map[string]string // accountId → its own caption (kept even when unticked)
-	captionMode string            // same / own
-	captionIDs  []string          // accounts with their own caption
-	captionHow  map[string]string // accountId → keep / edit / empty / copy
-	whenChoice  string
-	whenAt      string
-	tiktok      map[string]*api.TikTokCreatorInfo
-	aiOffIDs    []string                     // accounts the AI label was turned off for
-	forv        map[string]map[string]string // per-account flags: flag → accountId → value
+	kind         string
+	picked       []media.File         // chosen files, in the post's order
+	listDraft    []media.File         // ticked in the file list (in order), before the order screen
+	chosen       []api.ProjectAccount // ticked accounts
+	files        []media.File         // picked minus files left out as duplicates
+	dups         map[string]api.Duplicate
+	dupChoice    map[string]string // sha256 → post / new-only / skip
+	cover        *media.File       // cover image (not posted as media)
+	coverChoice  string            // none / frame / image
+	coverSecond  string
+	coverImage   string               // path
+	uploaded     map[string]api.Media // path → stored media (not uploaded twice)
+	textsSet     bool
+	captionFrom  string // file whose sidecar caption filled the caption
+	hashtags     string
+	ownCaption   map[string]string // accountId → its own caption (kept even when unticked)
+	captionMode  string            // same / own
+	captionIDs   []string          // accounts with their own caption
+	captionHow   map[string]string // accountId → keep / edit / empty / copy
+	whenChoice   string
+	repeatChoice string
+	repeatUntil  string
+	whenAt       string
+	tiktok       map[string]*api.TikTokCreatorInfo
+	aiOffIDs     []string                     // accounts the AI label was turned off for
+	forv         map[string]map[string]string // per-account flags: flag → accountId → value
 
 	presetsLoaded bool
 	templates     []api.Template
@@ -178,7 +183,7 @@ type poster struct {
 	ctx       context.Context
 	aiChecked bool
 	aiStatus  *api.AIStatus
-	wantAI    bool // "AI caption help" ticked on the texts screen
+	wantAI    bool      // "AI caption help" ticked on the texts screen
 	result    *api.Post // what was saved (batch reports it)
 }
 
@@ -1221,11 +1226,7 @@ func platformShort(p string) string {
 
 // finalLength: about how long the text gets on the platform (caption, then the hashtags).
 func (p *poster) finalLength(platform, caption string) int {
-	text := strings.TrimSpace(caption)
-	if len(p.plan.Hashtags) > 0 {
-		text += "\n\n#" + strings.Join(p.plan.Hashtags, " #")
-	}
-	return compose.TextLength(platform, text)
+	return compose.TextLength(platform, compose.FinalText(caption, p.plan.Hashtags))
 }
 
 // tooLong: accounts whose text would be over the platform's limit, with a line saying so.
@@ -1915,6 +1916,19 @@ func (p *poster) chooseWhen(ctx context.Context) error {
 						return nil
 					}))
 			}},
+			{run: func() error {
+				if p.whenChoice != "at" && p.whenChoice != "next-slot" {
+					return nil
+				}
+				if p.repeatChoice == "" {
+					p.repeatChoice = firstNonEmpty(p.f.repeat, "no")
+				}
+				return p.ask.form(huh.NewSelect[string]().Title("Repeat it?").Description("the same post again, every …").Options(
+					huh.NewOption("No, once", "no"), huh.NewOption("Every day", "daily"), huh.NewOption("Every week", "weekly"),
+					huh.NewOption("Every 2 weeks", "14"), huh.NewOption("Every 30 days", "30")).Value(&p.repeatChoice),
+					huh.NewInput().Title("Until (optional)").Description("YYYY-MM-DD, the last day · empty = until you stop it (mktauto stop-repeat)").
+						Value(&p.repeatUntil).Validate(validDay))
+			}},
 		}, false)
 		if err != nil {
 			return err
@@ -1961,6 +1975,56 @@ func (p *poster) chooseWhen(ctx context.Context) error {
 		}
 		p.plan.When = compose.When{Kind: "AT", At: when}
 	}
+	choice, until := p.f.repeat, p.f.repeatUntil
+	if p.wizard {
+		choice, until = p.repeatChoice, p.repeatUntil
+	}
+	days, err := parseRepeat(choice)
+	if err != nil {
+		return fmt.Errorf("--repeat: %w", err)
+	}
+	if err := validDay(until); err != nil {
+		return fmt.Errorf("--repeat-until: %w", err)
+	}
+	p.plan.RepeatDays, p.plan.RepeatUntil = 0, ""
+	if days > 0 {
+		if p.plan.When.Kind != "AT" && p.plan.When.Kind != "NEXT_SLOT" {
+			return errors.New("--repeat needs a time: --when \"YYYY-MM-DD HH:MM\" or next-slot")
+		}
+		p.plan.RepeatDays, p.plan.RepeatUntil = days, strings.TrimSpace(until)
+	}
+	return nil
+}
+
+// parseRepeat: no, daily, weekly, biweekly, monthly (30 days), or a number of days (7 or 7d), 1 to 365.
+func parseRepeat(s string) (int, error) {
+	switch v := strings.ToLower(strings.TrimSpace(s)); v {
+	case "", "no", "none", "never", "once":
+		return 0, nil
+	case "daily", "day":
+		return 1, nil
+	case "weekly", "week":
+		return 7, nil
+	case "biweekly", "fortnightly":
+		return 14, nil
+	case "monthly", "month":
+		return 30, nil
+	default:
+		var n int
+		if _, err := fmt.Sscanf(strings.TrimSuffix(v, "d"), "%d", &n); err != nil || n < 1 || n > 365 || strings.TrimLeft(strings.TrimSuffix(v, "d"), "0123456789") != "" {
+			return 0, fmt.Errorf("%q: use daily, weekly, biweekly, monthly or a number of days (1–365)", s)
+		}
+		return n, nil
+	}
+}
+
+func validDay(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", strings.TrimSpace(s)); err != nil {
+		return errors.New("write the day as YYYY-MM-DD")
+	}
 	return nil
 }
 
@@ -1972,6 +2036,41 @@ func (p *poster) actionLabel() string {
 		return "Publish now"
 	}
 	return "Save the draft"
+}
+
+// preview: each account's final text (caption, then hashtags, as the server composes it), title and first comment,
+// with its length against the platform's limit.
+func (p *poster) preview() string {
+	plan := p.plan
+	var b strings.Builder
+	for _, a := range plan.Accounts {
+		caption := plan.Caption
+		if c, ok := plan.Captions[a.AccountID]; ok {
+			caption = c
+		}
+		text := compose.FinalText(caption, plan.Hashtags)
+		n, limit := compose.TextLength(a.Platform, text), compose.MaxText(a.Platform, plan.FormatFor(a))
+		count := fmt.Sprintf("%s characters", humanize.Comma(int64(n)))
+		if limit > 0 && limit < 10000 {
+			count += " of " + humanize.Comma(int64(limit))
+			if n > limit {
+				count = red.Render(count + " · too long")
+			}
+		}
+		b.WriteString(bold.Render(accountLabel(a)) + "  " + faint.Render(compose.FormatLabel[plan.FormatFor(a)]+" · "+count) + "\n")
+		if t := strings.TrimSpace(plan.Titles[a.AccountID]); t != "" {
+			b.WriteString(faint.Render("Title: ") + t + "\n")
+		}
+		if strings.TrimSpace(text) == "" {
+			text = faint.Render("(no text)")
+		}
+		b.WriteString(text + "\n")
+		if fc := strings.TrimSpace(plan.FirstComment); fc != "" && compose.CommentsOn(a.Platform, plan.FormatFor(a)) {
+			b.WriteString(faint.Render("First comment: ") + fc + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // summary of the whole post, shown before anything is saved.
@@ -2012,6 +2111,13 @@ func (p *poster) summary() string {
 	}
 	if c := strings.TrimSpace(plan.Caption); c != "" {
 		fmt.Fprintf(&b, "Caption: %s\n", faint.Render(truncate(strings.ReplaceAll(c, "\n", " "), 90)))
+	}
+	if plan.RepeatDays > 0 {
+		until := "until you stop it"
+		if plan.RepeatUntil != "" {
+			until = "until " + plan.RepeatUntil
+		}
+		fmt.Fprintf(&b, "Repeats: every %s, %s\n", plural(plan.RepeatDays, "day"), until)
 	}
 	if len(plan.Hashtags) > 0 {
 		fmt.Fprintf(&b, "Hashtags: %s\n", faint.Render("#"+strings.Join(plan.Hashtags, " #")))
@@ -2069,11 +2175,20 @@ func (p *poster) confirm() error {
 	if p.plan.When.Kind != "DRAFT" {
 		opts = append(opts, huh.NewOption("Save it as a draft instead", "draft"))
 	}
-	if err := p.ask.form(
-		huh.NewNote().Title("Review").Description(p.summary()),
-		huh.NewSelect[string]().Title("Ready?").Description("esc goes back to change anything").Options(opts...).Value(&choice),
-	); err != nil {
-		return err
+	opts = append(opts, huh.NewOption("Preview the exact text each account gets", "preview"))
+	for {
+		if err := p.ask.form(
+			huh.NewNote().Title("Review").Description(p.summary()),
+			huh.NewSelect[string]().Title("Ready?").Description("esc goes back to change anything").Options(opts...).Value(&choice),
+		); err != nil {
+			return err
+		}
+		if choice != "preview" {
+			break
+		}
+		p.ask.asked-- // the preview is not a question to come back to
+		_, _ = p.ask.run(huh.NewForm(huh.NewGroup(huh.NewNote().Title("What each account gets").Description(p.preview()).Next(true).NextLabel("Back"))).WithShowHelp(true))
+		choice = "go"
 	}
 	if choice == "draft" {
 		p.plan.When = compose.When{Kind: "DRAFT"}
@@ -2091,6 +2206,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 		return err
 	}
 	if p.f.dryRun {
+		e.printf("%s\n\n", p.preview())
 		e.printf("%s Nothing was uploaded or saved. This is the post that would be sent:\n", yellow.Render("Dry run:"))
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -2366,6 +2482,8 @@ Platforms
 
 When and how
   --when WHEN                 draft (default), now, next-slot or "YYYY-MM-DD HH:MM" (project's timezone)
+  --repeat EVERY              post it again: daily, weekly, biweekly, monthly or N days (needs a time)
+  --repeat-until YYYY-MM-DD   the last day of the repeats (default: until mktauto stop-repeat)
   --duplicates WHAT           files posted before: post, new-only or skip
   --dry-run                   check everything, upload and save nothing, print the post
   --json                      print the saved post as JSON

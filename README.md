@@ -89,6 +89,34 @@ AI, and `mktauto ai shorten "…" --platform x` works in scripts.
 and one key to act: `s` schedule / move, `u` unschedule, `p` publish now, `e` edit caption, `c` cancel, `d` delete,
 `r` retry, `o` open. In every list of the wizard, `/` searches too.
 
+### Calendar, results, inbox, repost and repeat
+
+```sh
+mktauto calendar                    # the next 14 days, day by day, with the free posting times
+mktauto stats                       # the last 30 days: reach, likes, comments… per platform, top posts
+mktauto stats last --refresh        # one post, each account, fresh numbers from the platforms
+mktauto stats --links               # clicks on tracked links, by source
+mktauto inbox                       # failures, posts to finish yourself, approvals (enter: what to do)
+mktauto duplicate last --next-slot  # post it again: a copy, scheduled in the next free time
+mktauto post … --when "2026-12-01 18:00" --repeat weekly --repeat-until 2027-03-01
+mktauto stop-repeat 3f2a91c0
+```
+
+The review screen (and `--dry-run`) shows the exact text each account gets, with the hashtags added and its length
+against the platform's limit.
+
+### Tab completion
+
+```sh
+echo 'eval "$(mktauto completion bash)"' >> ~/.bashrc       # bash
+echo 'eval "$(mktauto completion zsh)"' >> ~/.zshrc         # zsh (after compinit)
+mktauto completion fish > ~/.config/fish/completions/mktauto.fish
+mktauto completion powershell >> $PROFILE                  # Windows PowerShell
+```
+
+Tab then completes commands, flags, your projects, accounts (`facebook,ins<Tab>`), groups, templates, hashtag sets,
+files and recent posts.
+
 Find names and ids for scripts: `mktauto projects`, `mktauto accounts --project Memoshot`, `mktauto boards @account`
 (all with `--json`).
 

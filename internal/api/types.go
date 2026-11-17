@@ -213,6 +213,7 @@ type PostInput struct {
 	MediaIDs      []string           `json:"mediaIds"`
 	Destinations  []DestinationInput `json:"destinations"`
 	Schedule      *Schedule          `json:"schedule,omitempty"`
+	Repeat        *Repeat            `json:"repeat,omitempty"`
 }
 
 type Issue struct {
@@ -255,6 +256,8 @@ type Post struct {
 	Media         []MediaItem   `json:"media"`
 	Destinations  []Destination `json:"destinations"`
 	CreatedAt     time.Time     `json:"createdAt"`
+	RepeatEvery   int           `json:"repeatEveryDays"`
+	RepeatUntil   string        `json:"repeatUntil"`
 }
 
 // Title is how a post is named in lists.
@@ -341,4 +344,68 @@ type AccountGroup struct {
 	ID         string   `json:"id"`
 	Name       string   `json:"name"`
 	AccountIDs []string `json:"accountIds"`
+}
+
+// Repeat: a post that comes back every N days (ADR-040), until a day (YYYY-MM-DD) or for good.
+type Repeat struct {
+	EveryDays int    `json:"everyDays"`
+	Until     string `json:"until,omitempty"`
+}
+
+type Analytics struct {
+	Days       int                         `json:"days"`
+	ByPlatform map[string]map[string]int64 `json:"byPlatform"`
+	Totals     map[string]int64            `json:"totals"`
+	Top        []TopPost                   `json:"top"`
+	Posts      int                         `json:"posts"`
+}
+
+type TopPost struct {
+	PostID      string           `json:"postId"`
+	Title       string           `json:"title"`
+	PublishedAt *time.Time       `json:"publishedAt"`
+	Totals      map[string]int64 `json:"totals"`
+}
+
+type PostMetrics struct {
+	PostID       string               `json:"postId"`
+	Totals       map[string]int64     `json:"totals"`
+	Destinations []DestinationMetrics `json:"destinations"`
+}
+
+type DestinationMetrics struct {
+	DestinationID string           `json:"destinationId"`
+	Platform      string           `json:"platform"`
+	AccountName   string           `json:"accountName"`
+	Metrics       map[string]int64 `json:"metrics"`
+	FetchedAt     *time.Time       `json:"fetchedAt"`
+	Error         string           `json:"error"`
+	Supported     bool             `json:"supported"`
+	Note          string           `json:"note"`
+}
+
+type Link struct {
+	ID        string           `json:"id"`
+	Code      string           `json:"code"`
+	ShortURL  string           `json:"shortUrl"`
+	TargetURL string           `json:"targetUrl"`
+	Campaign  string           `json:"campaign"`
+	ProjectID string           `json:"projectId"`
+	Clicks    int64            `json:"clicks"`
+	BySource  map[string]int64 `json:"bySource"`
+	CreatedAt time.Time        `json:"createdAt"`
+}
+
+type Notification struct {
+	ID            string     `json:"id"`
+	EventType     string     `json:"eventType"`
+	Severity      string     `json:"severity"`
+	Title         string     `json:"title"`
+	Body          string     `json:"body"`
+	ProjectID     string     `json:"projectId"`
+	PostID        string     `json:"postId"`
+	DestinationID string     `json:"destinationId"`
+	Link          string     `json:"link"`
+	ReadAt        *time.Time `json:"readAt"`
+	CreatedAt     time.Time  `json:"createdAt"`
 }

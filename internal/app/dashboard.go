@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/abdullahalnuman0/mktauto-cli/internal/api"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/compose"
@@ -180,7 +179,7 @@ func (m dashModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Quit
 				}
 			}
-			if strings.Contains("supecdro", key) {
+			if strings.Contains("supecdroDx", key) {
 				m.msg = yellow.Render(fmt.Sprintf("Not possible for a %s post (or not allowed for this terminal)", strings.ToLower(strings.ReplaceAll(p.Status, "_", " "))))
 				return m, nil
 			}
@@ -301,7 +300,7 @@ func (e *Env) posts(ctx context.Context, args []string) error {
 		}
 	}
 	load := func() ([]api.Post, error) {
-		all, err := c.Posts(ctx, time.Now().Add(-time.Duration(*days)*24*time.Hour))
+		all, err := recentPosts(ctx, c, *days)
 		return all, err
 	}
 	all, err := load()

@@ -75,7 +75,9 @@ func (e *Env) menu(ctx context.Context) error {
 			huh.NewOption(postLabel, "post"),
 			huh.NewOption("Saved posts: search, schedule, move, publish, edit, cancel, delete", "manage"),
 			huh.NewOption("Post many at once: one per file or subfolder", "batch"),
-			huh.NewOption("Status of recent posts", "status"),
+			huh.NewOption("Calendar: what's planned, and the free posting times", "calendar"),
+			huh.NewOption("Inbox"+e.unreadBadge(ctx), "inbox"),
+			huh.NewOption("Results: reach, likes, clicks", "stats"),
 			huh.NewOption("What was posted from this folder", "history"),
 			huh.NewOption("Who am I", "whoami"),
 			huh.NewOption("Sign out", "logout"),
@@ -91,8 +93,12 @@ func (e *Env) menu(ctx context.Context) error {
 			err = e.managePosts(ctx)
 		case "batch":
 			err = e.batch(ctx, nil)
-		case "status":
-			err = e.status(ctx, nil)
+		case "calendar":
+			err = e.calendar(ctx, nil)
+		case "inbox":
+			err = e.inbox(ctx, nil)
+		case "stats":
+			err = e.stats(ctx, nil)
 		case "history":
 			err = e.history(nil)
 		case "whoami":
@@ -158,7 +164,7 @@ func (e *Env) status(ctx context.Context, args []string) error {
 	if _, err := e.me(ctx, c); err != nil {
 		return err
 	}
-	posts, err := c.Posts(ctx, time.Now().Add(-14*24*time.Hour))
+	posts, err := recentPosts(ctx, c, 14)
 	if err != nil {
 		return err
 	}

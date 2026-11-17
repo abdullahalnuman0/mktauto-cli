@@ -226,7 +226,7 @@ func (e *Env) resolvePost(ctx context.Context, c *api.Client, arg string) (strin
 		if h, _ := history.For(e.Dir); len(h) > 0 {
 			return h[0].PostID, nil
 		}
-		posts, err := c.Posts(ctx, time.Now().Add(-90*24*time.Hour))
+		posts, err := recentPosts(ctx, c, 90)
 		if err != nil {
 			return "", err
 		}
@@ -239,7 +239,7 @@ func (e *Env) resolvePost(ctx context.Context, c *api.Client, arg string) (strin
 	case !hexPrefix.MatchString(arg):
 		return "", fmt.Errorf("%q isn't a post id", arg)
 	}
-	posts, err := c.Posts(ctx, time.Now().Add(-180*24*time.Hour))
+	posts, err := recentPosts(ctx, c, 180)
 	if err != nil {
 		return "", err
 	}
@@ -536,6 +536,10 @@ func actionsFor(p *api.Post, me *api.Me) []postAction {
 			out = append(out, a)
 		}
 	}
+	out = append(out, postAction{"D", "duplicate", "DRAFT"})
+	if p.RepeatEvery > 0 && (me == nil || me.Allows("SCHEDULE")) {
+		out = append(out, postAction{"x", "stop repeating", "SCHEDULE"})
+	}
 	return append(out, postAction{"o", "open on the website", ""})
 }
 
@@ -579,6 +583,10 @@ func (e *Env) runPostAction(ctx context.Context, p *api.Post, key string) error 
 		return e.retry(ctx, []string{id})
 	case "o":
 		return e.open(ctx, []string{id})
+	case "D":
+		return e.duplicate(ctx, []string{id})
+	case "x":
+		return e.stopRepeat(ctx, []string{id})
 	}
 	return nil
 }

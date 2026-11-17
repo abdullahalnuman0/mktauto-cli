@@ -324,3 +324,81 @@ func (c *Client) AccountGroups(ctx context.Context) ([]AccountGroup, error) {
 	_, err := c.do(ctx, http.MethodGet, "/api/account-groups", nil, &out)
 	return out, err
 }
+
+// PostsWhere lists posts; from filters on the planned time (posts without one are left out), status on the status.
+func (c *Client) PostsWhere(ctx context.Context, from *time.Time, status string) ([]Post, error) {
+	q := url.Values{}
+	if from != nil {
+		q.Set("from", from.UTC().Format(time.RFC3339))
+	}
+	if status != "" {
+		q.Set("status", status)
+	}
+	var out []Post
+	_, err := c.do(ctx, http.MethodGet, "/api/posts?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// Duplicate copies a post (files, accounts, texts) as a new draft in the same project.
+func (c *Client) Duplicate(ctx context.Context, postID string) (*Post, error) {
+	var out Post
+	_, err := c.do(ctx, http.MethodPost, "/api/posts/"+url.PathEscape(postID)+"/duplicate", nil, &out)
+	return &out, err
+}
+
+func (c *Client) StopRepeat(ctx context.Context, postID string) (*Post, error) {
+	var out Post
+	_, err := c.do(ctx, http.MethodPost, "/api/posts/"+url.PathEscape(postID)+"/stop-repeat", nil, &out)
+	return &out, err
+}
+
+func (c *Client) Analytics(ctx context.Context, days int, projectID string) (*Analytics, error) {
+	q := url.Values{"days": {fmt.Sprint(days)}}
+	if projectID != "" {
+		q.Set("projectId", projectID)
+	}
+	var out Analytics
+	_, err := c.do(ctx, http.MethodGet, "/api/analytics?"+q.Encode(), nil, &out)
+	return &out, err
+}
+
+// PostMetrics: what each account's copy of the post got (refresh = ask the platforms again now).
+func (c *Client) PostMetrics(ctx context.Context, postID string, refresh bool) (*PostMetrics, error) {
+	var out PostMetrics
+	method, path := http.MethodGet, "/api/posts/"+url.PathEscape(postID)+"/metrics"
+	if refresh {
+		method, path = http.MethodPost, path+"/refresh"
+	}
+	_, err := c.do(ctx, method, path, nil, &out)
+	return &out, err
+}
+
+func (c *Client) Links(ctx context.Context) ([]Link, error) {
+	var out []Link
+	_, err := c.do(ctx, http.MethodGet, "/api/links", nil, &out)
+	return out, err
+}
+
+func (c *Client) Notifications(ctx context.Context, unread bool, limit int) ([]Notification, error) {
+	var out []Notification
+	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/notifications?unread=%t&limit=%d", unread, limit), nil, &out)
+	return out, err
+}
+
+func (c *Client) UnreadCount(ctx context.Context) (int, error) {
+	var out struct {
+		Count int `json:"count"`
+	}
+	_, err := c.do(ctx, http.MethodGet, "/api/notifications/unread-count", nil, &out)
+	return out.Count, err
+}
+
+func (c *Client) MarkRead(ctx context.Context, id string) error {
+	_, err := c.do(ctx, http.MethodPost, "/api/notifications/"+url.PathEscape(id)+"/read", nil, nil)
+	return err
+}
+
+func (c *Client) ReadAll(ctx context.Context) error {
+	_, err := c.do(ctx, http.MethodPost, "/api/notifications/read-all", nil, nil)
+	return err
+}

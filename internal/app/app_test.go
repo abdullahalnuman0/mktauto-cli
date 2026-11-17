@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/abdullahalnuman0/mktauto-cli/internal/history"
 	"github.com/abdullahalnuman0/mktauto-cli/internal/update"
@@ -39,6 +40,7 @@ type fakeServer struct {
 	patched    []map[string]any
 	scheduleIn []map[string]any
 	aiCalls    []map[string]any
+	readAll    bool
 }
 
 func postID(n int) string { return fmt.Sprintf("%08d-0000-4000-8000-000000000000", n) }
@@ -167,9 +169,23 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/projects/p1/next-slots":
 		var out []map[string]any
 		for i := 0; i < 3; i++ { // only three free posting times
-			out = append(out, map[string]any{"localDateTime": fmt.Sprintf("2099-01-%02dT09:00:00", i+2), "timezone": "Asia/Dhaka"})
+			day := time.Now().Add(time.Duration(i+1) * 24 * time.Hour).Format("2006-01-02")
+			out = append(out, map[string]any{"localDateTime": day + "T09:00:00", "scheduledAt": day + "T03:00:00Z", "timezone": "Asia/Dhaka"})
 		}
 		f.json(w, 200, out)
+	case path == "/api/analytics":
+		f.json(w, 200, map[string]any{"days": 30, "posts": 4, "totals": map[string]any{"likes": 120, "reach": 3400},
+			"byPlatform": map[string]any{"INSTAGRAM": map[string]any{"likes": 100}}, "top": []map[string]any{{"postId": postID(1), "title": "Launch", "totals": map[string]any{"likes": 90}}}})
+	case path == "/api/links":
+		f.json(w, 200, []map[string]any{{"id": "l1", "shortUrl": "https://mktauto.site/l/AbC2345", "targetUrl": "https://memoshot.app", "clicks": 42, "bySource": map[string]any{"ig": 30, "fb": 12}}})
+	case path == "/api/notifications":
+		f.json(w, 200, []map[string]any{{"id": "n1", "eventType": "PUBLISH_FAILED", "severity": "ERROR", "title": "Instagram failed", "body": "Token expired",
+			"postId": postID(1), "createdAt": "2026-11-17T10:00:00Z"}})
+	case path == "/api/notifications/unread-count":
+		f.json(w, 200, map[string]any{"count": 1})
+	case path == "/api/notifications/read-all":
+		f.readAll = true
+		w.WriteHeader(204)
 	case path == "/api/post-templates":
 		f.json(w, 200, []map[string]any{{"id": "t1", "name": "Weekly tip", "caption": "Tip of the week", "hashtags": []string{"tips"},
 			"linkUrl": "https://memoshot.app", "firstComment": "", "accountIds": []string{"acc-fb", "acc-ig"}}})
@@ -217,6 +233,13 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 func (f *fakeServer) postAt(i int, status string) map[string]any {
 	p := f.postFrom(f.posts[i], status)
 	p["id"] = postID(i + 1)
+	if sch, ok := f.posts[i]["schedule"].(map[string]any); ok {
+		p["scheduledAt"] = strings.TrimSuffix(sch["localDateTime"].(string), "Z") + "Z"
+		p["status"] = "SCHEDULED"
+	}
+	if rep, ok := f.posts[i]["repeat"].(map[string]any); ok && f.state[postID(i+1)] != "STOPPED" {
+		p["repeatEveryDays"] = rep["everyDays"]
+	}
 	if s := f.state[postID(i+1)]; s != "" {
 		p["status"] = s
 	}
@@ -238,6 +261,16 @@ func (f *fakeServer) manage(w http.ResponseWriter, r *http.Request, path string,
 	case r.Method == "PATCH":
 		f.patched = append(f.patched, body)
 		f.json(w, 200, f.postAt(i, "DRAFT"))
+	case strings.HasSuffix(path, "/duplicate"):
+		f.posts = append(f.posts, f.posts[i])
+		f.json(w, 201, f.postAt(len(f.posts)-1, "DRAFT"))
+	case strings.HasSuffix(path, "/stop-repeat"):
+		f.state[id] = "STOPPED"
+		f.json(w, 200, f.postAt(i, "SCHEDULED"))
+	case strings.HasSuffix(path, "/metrics"):
+		f.json(w, 200, map[string]any{"postId": id, "totals": map[string]any{"likes": 12, "comments": 3},
+			"destinations": []map[string]any{{"platform": "INSTAGRAM", "accountName": "@memoshot.app", "supported": true, "metrics": map[string]any{"likes": 12}},
+				{"platform": "FACEBOOK_GROUP", "accountName": "Group", "supported": false, "note": "Facebook groups don't share numbers"}}})
 	case strings.HasSuffix(path, "/unschedule"):
 		f.state[id] = "DRAFT"
 		f.json(w, 200, f.postAt(i, "DRAFT"))

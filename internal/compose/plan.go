@@ -47,6 +47,8 @@ type Plan struct {
 	CoverIndex    int // index into Items of the cover image for videos; -1 = none
 	CoverFrameMs  int // > 0: a frame of the video where an image cover isn't possible
 	When          When
+	RepeatDays    int    // > 0: comes back every N days (scheduled posts)
+	RepeatUntil   string // YYYY-MM-DD, "" = for good
 }
 
 func NewPlan() *Plan {
@@ -232,6 +234,9 @@ func (p *Plan) Input() (api.PostInput, error) {
 			return api.PostInput{}, err
 		}
 		in.Schedule = &api.Schedule{LocalDateTime: local, Timezone: p.Project.Timezone}
+		if p.RepeatDays > 0 {
+			in.Repeat = &api.Repeat{EveryDays: p.RepeatDays, Until: p.RepeatUntil}
+		}
 	}
 	return in, nil
 }
@@ -338,6 +343,55 @@ func platformMatches(term, platform string) bool {
 		if term == a {
 			return true
 		}
+	}
+	return false
+}
+
+// FinalText is the text an account gets, as the server composes it (CaptionComposer): the caption, then a blank line
+// and the hashtags it doesn't already contain.
+func FinalText(caption string, hashtags []string) string {
+	text := strings.TrimSpace(caption)
+	lower := strings.ToLower(text)
+	var tags []string
+	seen := map[string]bool{}
+	for _, raw := range hashtags {
+		t := strings.Join(strings.Fields(raw), "")
+		t = strings.TrimLeft(t, "#")
+		if t == "" {
+			continue
+		}
+		tag := "#" + t
+		lt := strings.ToLower(tag)
+		if seen[lt] || containsTag(lower, lt) {
+			continue
+		}
+		seen[lt] = true
+		tags = append(tags, tag)
+	}
+	if len(tags) == 0 {
+		return text
+	}
+	if text == "" {
+		return strings.Join(tags, " ")
+	}
+	return text + "\n\n" + strings.Join(tags, " ")
+}
+
+func containsTag(lowerText, lowerTag string) bool {
+	for i := strings.Index(lowerText, lowerTag); i >= 0; {
+		end := i + len(lowerTag)
+		if end == len(lowerText) {
+			return true
+		}
+		r := rune(lowerText[end])
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r >= 0x80) {
+			return true
+		}
+		next := strings.Index(lowerText[i+1:], lowerTag)
+		if next < 0 {
+			return false
+		}
+		i += 1 + next
 	}
 	return false
 }

@@ -34,7 +34,7 @@ func TestBatchIntoNextFreeSlots(t *testing.T) {
 		t.Errorf("captions: %v", captions)
 	}
 	sched := f.posts[2]["schedule"].(map[string]any)
-	if sched["localDateTime"] != "2099-01-04T09:00:00" {
+	if sched["localDateTime"] != time.Now().Add(72*time.Hour).Format("2006-01-02")+"T09:00:00" {
 		t.Errorf("third post in the third free time: %v", sched)
 	}
 	if !strings.Contains(out, "over --limit") || !strings.Contains(out, "3/3") {
@@ -85,7 +85,7 @@ func TestImportCSV(t *testing.T) {
 	if len(f.posts) != 3 || f.posts[0]["baseCaption"] != "Two images, one post" || len(f.posts[0]["mediaIds"].([]any)) != 2 {
 		t.Fatalf("posts: %v", f.posts)
 	}
-	if s := f.posts[1]["schedule"].(map[string]any); s["localDateTime"] != "2099-01-02T09:00:00" {
+	if s := f.posts[1]["schedule"].(map[string]any); s["localDateTime"] != time.Now().Add(24*time.Hour).Format("2006-01-02")+"T09:00:00" {
 		t.Errorf("next-slot row: %v", s)
 	}
 	if f.posts[2]["schedule"] != nil {

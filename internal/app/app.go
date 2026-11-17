@@ -59,6 +59,9 @@ Find what to post to:
 
 Saved posts (POST = an id, its first characters as status shows them, or "last"):
   mktauto posts              full screen: search, filter by status, one key to schedule/publish/edit/cancel/delete
+  mktauto calendar           what's planned, day by day, with the free posting times
+  mktauto stats [POST]       results: reach, likes, comments… (--links: clicks on tracked links)
+  mktauto inbox              failures, posts to finish yourself, approvals
   mktauto status [POST]      recent posts, or one post's accounts
   mktauto edit POST          change caption, hashtags, link or name (--caption, --hashtags, --link, --name)
   mktauto schedule POST      schedule or move it (--at "YYYY-MM-DD HH:MM" or --next-slot)
@@ -66,6 +69,8 @@ Saved posts (POST = an id, its first characters as status shows them, or "last")
   mktauto publish POST       publish now
   mktauto cancel POST        stop what isn't published yet
   mktauto delete POST        delete a draft
+  mktauto duplicate POST     a copy as a new draft (--at or --next-slot schedules it)
+  mktauto stop-repeat POST   no more repeats of a repeating post
   mktauto retry POST         publish failed accounts again
   mktauto open [POST]        open the website (or the post) in the browser
   mktauto history [--all]    what was posted from this folder
@@ -79,6 +84,7 @@ This computer:
   mktauto whoami             who and what this terminal may do
   mktauto doctor             check the connection and this installation
   mktauto update             install the latest version (--version vX.Y.Z for another one)
+  mktauto completion SHELL   tab completion for bash, zsh, fish or powershell
   mktauto version
 
 Global: --server URL (or MKTAUTO_SERVER) to use another MKTAuto server. Most commands take --json.
@@ -114,7 +120,8 @@ func Run(args []string, version string) int {
 		update.Cleanup(exe) // the program a Windows update left behind
 	}
 	var notice <-chan string
-	if cmd != "update" && cmd != "version" && cmd != "--version" && cmd != "-v" && cmd != "help" && cmd != "-h" && cmd != "--help" {
+	if cmd != "update" && cmd != "version" && cmd != "--version" && cmd != "-v" && cmd != "help" && cmd != "-h" && cmd != "--help" &&
+		cmd != "__complete" && cmd != "completion" {
 		notice = env.noticeUpdate(ctx)
 	}
 	err = env.dispatch(ctx, cmd, args)
@@ -205,6 +212,20 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.posts(ctx, args)
 	case "batch":
 		return e.batch(ctx, args)
+	case "calendar":
+		return e.calendar(ctx, args)
+	case "stats":
+		return e.stats(ctx, args)
+	case "inbox":
+		return e.inbox(ctx, args)
+	case "duplicate", "repost":
+		return e.duplicate(ctx, args)
+	case "stop-repeat":
+		return e.stopRepeat(ctx, args)
+	case "completion":
+		return e.completion(args)
+	case "__complete":
+		return e.completeCommand(ctx, args)
 	case "import":
 		return e.importCSV(ctx, args)
 	case "update":
