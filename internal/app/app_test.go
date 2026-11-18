@@ -174,10 +174,16 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		f.json(w, 200, out)
 	case path == "/api/analytics" && r.URL.Query().Get("range") == "today":
-		f.json(w, 200, map[string]any{"days": 1, "range": "today", "timezone": r.URL.Query().Get("tz"), "posts": 1, "totals": map[string]any{"likes": 5},
+		f.json(w, 200, map[string]any{"days": 1, "range": "today", "timezone": "Asia/Dhaka", "posts": 1, "totals": map[string]any{"likes": 5},
 			"gained": map[string]any{"likes": 30, "comments": 5, "views": 900}, "gainedPrevious": map[string]any{"likes": 20, "views": 1000},
 			"historyFrom": "2026-11-18", "clicks": map[string]any{"total": 12, "previous": 0},
-			"activity": map[string]any{"published": 2, "failed": 1, "scheduled": 3, "manual": 0}})
+			"activity": map[string]any{"published": 2, "failed": 1, "scheduled": 3, "manual": 0},
+			"coverage": map[string]any{"current": "full", "previous": "full"}, "metricSources": map[string]any{"likes": []string{"FACEBOOK_PAGE", "INSTAGRAM"}, "views": []string{"YOUTUBE"}}})
+	case path == "/api/analytics" && r.URL.Query().Get("range") == "7d":
+		// Tracking began during the week: no earlier numbers, so no change may be shown.
+		f.json(w, 200, map[string]any{"days": 7, "range": "7d", "timezone": "Asia/Dhaka", "posts": 0, "totals": map[string]any{},
+			"gained": map[string]any{"likes": 8}, "gainedPrevious": nil, "historyFrom": "2026-11-16",
+			"coverage": map[string]any{"current": "partial", "previous": "none"}})
 	case path == "/api/analytics":
 		f.json(w, 200, map[string]any{"days": 30, "posts": 4, "totals": map[string]any{"likes": 120, "reach": 3400},
 			"byPlatform": map[string]any{"INSTAGRAM": map[string]any{"likes": 100}}, "top": []map[string]any{{"postId": postID(1), "title": "Launch", "totals": map[string]any{"likes": 90}}}})
@@ -499,7 +505,9 @@ func TestUpdateNoticeAndCheck(t *testing.T) {
 	}))
 	defer gh.Close()
 	old := releases
-	releases = func() *update.Source { return &update.Source{Web: gh.URL + "/web", API: gh.URL + "/api", Download: gh.URL + "/dl", HTTP: gh.Client()} }
+	releases = func() *update.Source {
+		return &update.Source{Web: gh.URL + "/web", API: gh.URL + "/api", Download: gh.URL + "/dl", HTTP: gh.Client()}
+	}
 	defer func() { releases = old }()
 	t.Setenv("MKTAUTO_NO_UPDATE_CHECK", "")
 	if code, out := runCLI(t, dir, "history"); code != 0 || !strings.Contains(out, "mktauto v9.0.0 is available") {
@@ -514,4 +522,3 @@ func TestUpdateNoticeAndCheck(t *testing.T) {
 		t.Errorf("cached notice: %d %s", code, out)
 	}
 }
-

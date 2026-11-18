@@ -12,7 +12,7 @@ import (
 func TestCalendarRepeatDuplicateAndStopRepeat(t *testing.T) {
 	f, dir := setup(t)
 	login(t, dir)
-	at := time.Now().Add(48 * time.Hour).Format("2006-01-02") + " 10:00"
+	at := time.Now().Add(48*time.Hour).Format("2006-01-02") + " 10:00"
 	code, out := runCLI(t, dir, "post", "--project", "Memoshot", "--accounts", "facebook", "--caption", "Weekly tip", "--when", at,
 		"--repeat", "weekly", "--repeat-until", "2099-12-31", "--yes")
 	if code != 0 {
@@ -54,6 +54,13 @@ func TestStatsAndInbox(t *testing.T) {
 		!strings.Contains(out, "900 ▼ 10%") || !strings.Contains(out, "12 ▲ new") || !strings.Contains(out, "1 failed") ||
 		!strings.Contains(out, "3 still to go today") || !strings.Contains(out, "tracked from 2026-11-18") {
 		t.Errorf("stats --today: %s", out)
+	}
+	if _, out := runCLI(t, dir, "stats", "--today"); !strings.Contains(out, "Facebook Page, Instagram") || !strings.Contains(out, "· YouTube") {
+		t.Errorf("stats --today sources: %s", out)
+	}
+	if code, out := runCLI(t, dir, "stats", "--range", "7d"); code != 0 || strings.Contains(out, "▲") || strings.Contains(out, "▼") ||
+		!strings.Contains(out, "no earlier numbers to compare") || !strings.Contains(out, "only since 2026-11-16") {
+		t.Errorf("stats --range 7d with partial tracking: %s", out)
 	}
 	if code, out := runCLI(t, dir, "stats", "last"); code != 0 || !strings.Contains(out, "12 likes · 3 comments") || !strings.Contains(out, "don't share numbers") {
 		t.Errorf("post stats: %s", out)

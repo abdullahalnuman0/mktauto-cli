@@ -233,7 +233,7 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 					}
 					pid = p.ID
 				}
-				return c.AnalyticsRange(ctx, firstNonEmpty(sArg(a, "range"), fmt.Sprintf("%dd", iArg(a, "days", 30))), localZone(), pid)
+				return c.AnalyticsRange(ctx, firstNonEmpty(sArg(a, "range"), fmt.Sprintf("%dd", iArg(a, "days", 30))), "", pid)
 			}},
 		{Name: "ai_caption", Title: "AI caption help", Description: "The server's caption helper: improve, shorten, professional, casual, hashtags or translate. Uses the user's daily AI limit.",
 			InputSchema: obj(map[string]any{"action": str("improve, shorten, professional, casual, hashtags or translate"), "text": str("the caption"),

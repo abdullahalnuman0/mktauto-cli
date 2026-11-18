@@ -372,6 +372,15 @@ type Analytics struct {
 	Daily          []AnalyticsDay              `json:"daily"`
 	Activity       *Activity                   `json:"activity"`
 	Clicks         *Clicks                     `json:"clicks"`
+	Coverage       *Coverage                   `json:"coverage"`      // ADR-084
+	MetricSources  map[string][]string         `json:"metricSources"` // platforms each number comes from
+}
+
+// Coverage: how much of each period the server's snapshots cover (full, partial, none). GainedPrevious is null unless
+// the previous period is fully covered: never show a change against numbers that were never recorded.
+type Coverage struct {
+	Current  string `json:"current"`
+	Previous string `json:"previous"`
 }
 
 type AccountTotals struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -280,7 +279,7 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 	if *today {
 		window = "today"
 	}
-	a, err := c.AnalyticsRange(ctx, window, localZone(), pid)
+	a, err := c.AnalyticsRange(ctx, window, "", pid) // days follow the user's own timezone (as on the website)
 	if api.IsProblem(err, 403, "cli_project") {
 		return withCode(exitNotAllowed, errors.New("this terminal may only see some projects: add --project NAME"))
 	}
@@ -299,9 +298,31 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 		prevLabel = "the previous " + plural(a.Days, "day")
 	}
 	e.printf("%s\n", bold.Render(label)+faint.Render(" · compared with "+prevLabel))
-	if a.Gained != nil {
-		e.printf("  %-18s %s\n", "Engagement gained", withDelta(engagement(a.Gained), engagement(a.GainedPrevious)))
-		e.printf("  %-18s %s\n", "Views gained", withDelta(a.Gained["views"], a.GainedPrevious["views"]))
+	cov := a.Coverage
+	switch {
+	case cov != nil && cov.Current == "none":
+		e.printf("  %-18s %s\n", "Growth", faint.Render("not tracked for this period yet (tracking starts when numbers are first read)"))
+	case a.Gained != nil:
+		comparable := a.GainedPrevious != nil && (cov == nil || cov.Previous == "full")
+		delta := func(now int64, before func() int64) string {
+			if !comparable {
+				return humanize.Comma(now)
+			}
+			return withDelta(now, before())
+		}
+		e.printf("  %-18s %s%s\n", "Engagement gained", delta(engagement(a.Gained), func() int64 { return engagement(a.GainedPrevious) }), sourcesOf(a, "likes", "comments", "shares", "saves"))
+		if _, ok := a.Gained["views"]; ok {
+			e.printf("  %-18s %s%s\n", "Views gained", delta(a.Gained["views"], func() int64 { return a.GainedPrevious["views"] }), sourcesOf(a, "views"))
+		}
+		if _, ok := a.Gained["impressions"]; ok {
+			e.printf("  %-18s %s%s\n", "Impressions gained", delta(a.Gained["impressions"], func() int64 { return a.GainedPrevious["impressions"] }), sourcesOf(a, "impressions"))
+		}
+		if !comparable {
+			e.printf("  %s\n", faint.Render("no earlier numbers to compare growth with yet"))
+		}
+		if cov != nil && cov.Current == "partial" {
+			e.printf("  %s\n", faint.Render("growth counted only since "+a.HistoryFrom+", when tracking began"))
+		}
 	}
 	if a.Clicks != nil {
 		e.printf("  %-18s %s\n", "Link clicks", withDelta(a.Clicks.Total, a.Clicks.Previous))
@@ -319,8 +340,12 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 		}
 		e.printf("  %-18s %s\n", "Posts", line)
 	}
-	if a.HistoryFrom != "" && a.Range != "" {
-		e.printf("  %s\n", faint.Render("growth is tracked from "+a.HistoryFrom))
+	if a.HistoryFrom != "" && a.Range != "" && (a.Coverage == nil || a.Coverage.Current == "full") {
+		note := "growth is tracked from " + a.HistoryFrom
+		if a.Timezone != "" {
+			note += " · days follow " + a.Timezone
+		}
+		e.printf("  %s\n", faint.Render(note))
 	}
 	e.printf("%s %s\n", bold.Render(fmt.Sprintf("Posts published in this period (%d):", a.Posts)), metricsLine(a.Totals))
 	var plats []string
@@ -512,18 +537,21 @@ func withDelta(now, before int64) string {
 	return s
 }
 
-// localZone: this computer's IANA timezone ("" when unknown: the server uses the project's).
-func localZone() string {
-	if tz := os.Getenv("TZ"); tz != "" {
-		return tz
-	}
-	if name := time.Now().Location().String(); name != "Local" && name != "" {
-		return name
-	}
-	if target, err := os.Readlink("/etc/localtime"); err == nil {
-		if _, zone, ok := strings.Cut(target, "zoneinfo/"); ok {
-			return zone
+// sourcesOf: " · Facebook, Instagram": which platforms these numbers come from (they measure different things).
+func sourcesOf(a *api.Analytics, metrics ...string) string {
+	seen := map[string]bool{}
+	var names []string
+	for _, m := range metrics {
+		for _, p := range a.MetricSources[m] {
+			if !seen[p] {
+				seen[p] = true
+				names = append(names, compose.PlatformLabel[p])
+			}
 		}
 	}
-	return ""
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return faint.Render(" · " + strings.Join(names, ", "))
 }
