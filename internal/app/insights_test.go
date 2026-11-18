@@ -122,7 +122,7 @@ func TestCompletion(t *testing.T) {
 				t.Errorf("%s -h doesn't show -%s:\n%s", cmd, n, help)
 			}
 		}
-		if cmd == "batch" || cmd == "import" || cmd == "watch" {
+		if cmd == "batch" || cmd == "import" || cmd == "watch" || cmd == "draft" {
 			continue // their help lists mktauto post's flags too
 		}
 		for _, line := range strings.Split(help, "\n") {

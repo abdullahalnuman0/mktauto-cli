@@ -29,7 +29,7 @@ var commandHelp = map[string]string{
 	"delete": "delete a draft", "duplicate": "copy a post", "stop-repeat": "stop a repeating post", "retry": "publish failed accounts again",
 	"open": "open on the website", "history": "what was posted from here", "projects": "list projects", "accounts": "list accounts",
 	"boards": "Pinterest boards", "ai": "AI caption help", "login": "sign in", "logout": "sign out", "whoami": "who am I",
-	"doctor": "check this installation", "preset": "saved sets of post flags", "watch": "post new files as they arrive", "best-times": "when your posts did best", "mcp": "connect AI assistants", "update": "install the latest version", "version": "show the version", "completion": "tab completion script",
+	"doctor": "check this installation", "preset": "saved sets of post flags", "watch": "post new files as they arrive", "best-times": "when your posts did best", "mcp": "connect AI assistants", "draft": "a what's-new post from git commits", "update": "install the latest version", "version": "show the version", "completion": "tab completion script",
 }
 
 // commandFlags: each command's flags (post, batch and import add mktauto post's; a test keeps them in step).
@@ -39,6 +39,7 @@ var commandFlags = map[string][]string{
 	"watch":       {"each", "interval", "existing"},
 	"best-times":  {"project", "platform", "days", "json"},
 	"mcp":         {"allow"},
+	"draft":       {"from-git", "repo", "since", "app", "language", "max", "print"},
 	"posts":       {"days", "status", "json"},
 	"calendar":    {"days", "project", "json"},
 	"stats":       {"days", "project", "refresh", "links", "json"},
@@ -78,7 +79,7 @@ func flagsFor(cmd string) []string {
 	switch cmd {
 	case "post":
 		return postFlagNames()
-	case "batch", "import", "watch":
+	case "batch", "import", "watch", "draft":
 		return append(postFlagNames(), commandFlags[cmd]...)
 	}
 	return commandFlags[cmd]

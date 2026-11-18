@@ -53,6 +53,7 @@ Usage:
   mktauto post [flags]       post files from this folder (no flags: step by step; -h lists every flag)
   mktauto batch              one post per file or subfolder, in the next free posting times (or drafts)
   mktauto import FILE.csv    one post per spreadsheet row (--example prints one)
+  mktauto draft --from-git   a "what's new" post from an app's commits since its last release
   mktauto watch              keeps running: each new file dropped here becomes a post
   mktauto preset save NAME   save post flags (project, accounts, hashtags…) to use anywhere with --preset NAME
 
@@ -227,6 +228,8 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.posts(ctx, args)
 	case "batch":
 		return e.batch(ctx, args)
+	case "draft":
+		return e.draft(ctx, args)
 	case "calendar":
 		return e.calendar(ctx, args)
 	case "stats":

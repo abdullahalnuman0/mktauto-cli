@@ -1,0 +1,3 @@
+# mktauto
+
+@AGENTS.md

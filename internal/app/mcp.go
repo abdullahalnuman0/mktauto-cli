@@ -323,6 +323,32 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 				}
 				return e.runCaptured(ctx, func(sub *Env) error { return sub.post(ctx, args) })
 			}},
+		{Name: "release_post", Title: "Post about a new release",
+			Description: "Writes a \"what's new\" post from an app's git commits since its last release tag (internal commits left out; the AI writes it, or a plain list without AI). With print_only it returns the text; otherwise it saves it as a draft for the given project and accounts (with files, if given).",
+			InputSchema: obj(map[string]any{"repo": str("path of the app's git repository (default: where mktauto mcp runs)"), "since": str("start after this tag or commit"),
+				"app": str("the app's name"), "link": str("store page or release notes link"), "language": str("default English"),
+				"project": str("project (needed unless print_only)"), "accounts": strList("accounts"), "files": strList("screenshots/videos, in order"),
+				"print_only": boolean("only return the text")}),
+			Annotations: write, level: 1, run: func(ctx context.Context, a map[string]any) (any, error) {
+				args := []string{"--from-git"}
+				for k, flagName := range map[string]string{"repo": "repo", "since": "since", "app": "app", "link": "link", "language": "language", "project": "project"} {
+					if v := sArg(a, k); v != "" {
+						args = append(args, "--"+flagName, v)
+					}
+				}
+				if mcpBool(a, "print_only") {
+					args = append(args, "--print")
+				} else {
+					if sArg(a, "project") == "" || len(listArg(a, "accounts")) == 0 {
+						return nil, errors.New("give project and accounts, or print_only")
+					}
+					args = append(args, "--accounts", strings.Join(listArg(a, "accounts"), ","), "--when", "draft", "--yes", "--duplicates", "new-only", "--json")
+					if files := listArg(a, "files"); len(files) > 0 {
+						args = append(args, "--files", strings.Join(files, ","))
+					}
+				}
+				return e.runCaptured(ctx, func(sub *Env) error { return sub.draft(ctx, args) })
+			}},
 		{Name: "edit_post", Title: "Edit a post", Description: "Changes a draft's (or a scheduled post's, before it starts publishing) caption, hashtags, link or internal name.",
 			InputSchema: obj(map[string]any{"post": str("post"), "caption": str("new caption"), "hashtags": strList("new hashtags (replace)"), "link": str("new link"), "name": str("new internal name")}, "post"),
 			Annotations: write, level: 1, run: func(ctx context.Context, a map[string]any) (any, error) {

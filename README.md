@@ -117,6 +117,21 @@ mktauto post … --files a.png,b.png --alt a.png="The editor on a phone" --alt-a
 mktauto post … --accounts x,threads --caption-file long.txt --thread-for x,threads
 ```
 
+### A post for every release
+
+```sh
+mktauto draft --from-git --repo ~/code/reelwise --app ReelWise --link https://play.google.com/store/apps/details?id=…
+```
+
+Reads the app's commits since its last release tag (leaving out internal ones such as `chore:`, `test:`, `docs:`), lets
+the AI write a "what's new" post from them (or a plain list without AI) and opens the post wizard with it filled in.
+Add `--project`, `--accounts`, `--files` … to save it as a draft straight away; `--print` only shows the text. AI
+assistants get the same as the MCP tool `release_post`.
+
+### Working on mktauto with an AI assistant
+
+`AGENTS.md` describes the code for Codex and other agents (`CLAUDE.md` imports it for Claude Code).
+
 ### Watch a folder, best times, presets
 
 ```sh
