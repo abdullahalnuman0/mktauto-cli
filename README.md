@@ -97,6 +97,8 @@ mktauto calendar                    # the next 14 days, day by day, with the fre
 mktauto stats                       # the last 30 days: reach, likes, comments… per platform, top posts
 mktauto stats --today               # today so far vs yesterday: growth, link clicks, published/failed/still to go
 mktauto stats --range 7d            # also yesterday, 30d, 90d, 365d
+mktauto balance                     # your credit: balance, available, the last days' charges (--json)
+mktauto billing                     # top up, prices: opens the website's Billing page
 mktauto stats last --refresh        # one post, each account, fresh numbers from the platforms
 mktauto stats --links               # clicks on tracked links, by source
 mktauto inbox                       # failures, posts to finish yourself, approvals (enter: what to do)

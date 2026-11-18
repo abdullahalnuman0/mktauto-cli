@@ -2366,6 +2366,7 @@ func (p *poster) saveAndAct(ctx context.Context) error {
 	}
 	p.remember(result, label)
 	p.result = result
+	defer p.costLine(ctx, result.ID)
 	switch label {
 	case "draft":
 		e.printf("%s Draft saved. Finish it on the website: mktauto open %s\n", green.Render("✓"), result.ID)

@@ -466,3 +466,49 @@ type AltTextResult struct {
 	UsedToday  int    `json:"usedToday"`
 	DailyLimit int    `json:"dailyLimit"`
 }
+
+// Billing (ADR-087): the prepaid wallet. Money is micro-USD (1 USD = 1,000,000).
+type Billing struct {
+	Mode                    string `json:"mode"`
+	Exempt                  bool   `json:"exempt"`
+	BalanceMicros           int64  `json:"balanceMicros"`
+	AvailableMicros         int64  `json:"availableMicros"`
+	HeldMicros              int64  `json:"heldMicros"`
+	CreditLimitMicros       int64  `json:"creditLimitMicros"`
+	DailyCapMicros          *int64 `json:"dailyCapMicros"`
+	SpentTodayMicros        int64  `json:"spentTodayMicros"`
+	Spent30dMicros          int64  `json:"spent30dMicros"`
+	DaysLeft                *int64 `json:"daysLeft"`
+	ScheduledEstimateMicros int64  `json:"scheduledEstimateMicros"`
+	StorageUsedBytes        int64  `json:"storageUsedBytes"`
+	StorageQuotaBytes       int64  `json:"storageQuotaBytes"`
+}
+
+type LedgerLine struct {
+	Kind         string `json:"kind"`
+	AmountMicros int64  `json:"amountMicros"`
+	BalanceAfter int64  `json:"balanceAfterMicros"`
+	PostID       string `json:"postId"`
+	PostTitle    string `json:"postTitle"`
+	Platform     string `json:"platform"`
+	Format       string `json:"format"`
+	Via          string `json:"via"`
+	Note         string `json:"note"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+type Estimate struct {
+	Exempt           bool   `json:"exempt"`
+	AutomationMicros int64  `json:"automationMicros"`
+	TotalMicros      int64  `json:"totalMicros"`
+	AvailableMicros  *int64 `json:"availableMicros"`
+	Destinations     []struct {
+		Platform           string `json:"platform"`
+		Format             string `json:"format"`
+		Manual             bool   `json:"manual"`
+		ServiceMicros      int64  `json:"serviceMicros"`
+		PlatformCostMicros int64  `json:"platformCostMicros"`
+		FollowUpMicros     int64  `json:"followUpMicros"`
+		TotalMicros        int64  `json:"totalMicros"`
+	} `json:"destinations"`
+}

@@ -66,6 +66,7 @@ Saved posts (POST = an id, its first characters as status shows them, or "last")
   mktauto posts              full screen: search, filter by status, one key to schedule/publish/edit/cancel/delete
   mktauto calendar           what's planned, day by day, with the free posting times
   mktauto stats [POST]       results: reach, likes, comments… (--links: clicks on tracked links)
+  mktauto balance            your credit: balance, what posts cost, the last days' charges (top up: mktauto billing)
   mktauto inbox              failures, posts to finish yourself, approvals
   mktauto best-times         when your posts did best, by day and time (a suggestion from your own results)
   mktauto status [POST]      recent posts, or one post's accounts
@@ -234,6 +235,10 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.calendar(ctx, args)
 	case "stats":
 		return e.stats(ctx, args)
+	case "balance", "credit", "wallet":
+		return e.balance(ctx, args)
+	case "billing":
+		return e.billing(ctx, args)
 	case "inbox":
 		return e.inbox(ctx, args)
 	case "duplicate", "repost":

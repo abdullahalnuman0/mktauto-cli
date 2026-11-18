@@ -23,6 +23,7 @@ import (
 
 var commandHelp = map[string]string{
 	"post": "post files from this folder", "batch": "one post per file or subfolder", "import": "one post per spreadsheet row",
+	"balance": "your credit and charges", "billing": "top up on the website",
 	"posts": "full-screen list of posts", "calendar": "what's planned", "stats": "results", "inbox": "failures, approvals",
 	"status": "recent posts or one post", "edit": "change a saved post", "schedule": "schedule or move a post",
 	"unschedule": "back to a draft", "publish": "publish a saved post now", "cancel": "stop what isn't published",
@@ -43,6 +44,7 @@ var commandFlags = map[string][]string{
 	"posts":       {"days", "status", "json"},
 	"calendar":    {"days", "project", "json"},
 	"stats":       {"days", "range", "today", "project", "refresh", "links", "json"},
+	"balance":     {"days", "json"},
 	"inbox":       {"all", "read-all", "json"},
 	"edit":        {"caption", "caption-file", "hashtags", "link", "name"},
 	"schedule":    {"at", "next-slot"},

@@ -425,3 +425,34 @@ func (c *Client) AIAltText(ctx context.Context, assetID, language string) (*AltT
 	_, err := c.do(ctx, http.MethodPost, "/api/ai/alt-text", body, &out)
 	return &out, err
 }
+
+// Billing: the wallet; nil (no error) from a server without billing.
+func (c *Client) Billing(ctx context.Context) (*Billing, error) {
+	var out Billing
+	if _, err := c.do(ctx, http.MethodGet, "/api/billing", nil, &out); err != nil {
+		if IsProblem(err, 404, "") || IsProblem(err, 403, "cli_not_allowed") { // a server without billing
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Ledger: the last N days (≤ 30) of charges and top-ups, newest first.
+func (c *Client) Ledger(ctx context.Context, days int) ([]LedgerLine, error) {
+	var out []LedgerLine
+	_, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/billing/ledger?days=%d", days), nil, &out)
+	return out, err
+}
+
+// Estimate: what a saved post will cost (the server's numbers); nil from a server without billing.
+func (c *Client) Estimate(ctx context.Context, postID string) (*Estimate, error) {
+	var out Estimate
+	if _, err := c.do(ctx, http.MethodGet, "/api/posts/"+url.PathEscape(postID)+"/estimate", nil, &out); err != nil {
+		if IsProblem(err, 404, "") || IsProblem(err, 403, "cli_not_allowed") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &out, nil
+}

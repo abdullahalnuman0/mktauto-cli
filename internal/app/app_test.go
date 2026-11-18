@@ -173,6 +173,17 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{"localDateTime": day + "T09:00:00", "scheduledAt": day + "T03:00:00Z", "timezone": "Asia/Dhaka"})
 		}
 		f.json(w, 200, out)
+	case path == "/api/billing":
+		f.json(w, 200, map[string]any{"mode": "PREPAID", "exempt": false, "balanceMicros": 480000, "availableMicros": 460000, "heldMicros": 20000,
+			"creditLimitMicros": 0, "spentTodayMicros": 17000, "spent30dMicros": 120000, "daysLeft": 120, "scheduledEstimateMicros": 34000,
+			"storageUsedBytes": 10 << 20, "storageQuotaBytes": 2048 << 20})
+	case path == "/api/billing/ledger":
+		f.json(w, 200, []map[string]any{
+			{"kind": "CHARGE", "amountMicros": -12000, "balanceAfterMicros": 480000, "postTitle": "Launch reel", "platform": "INSTAGRAM", "format": "REEL", "createdAt": "2026-11-18T10:00:00Z"},
+			{"kind": "TOPUP", "amountMicros": 10000000, "balanceAfterMicros": 492000, "createdAt": "2026-11-17T10:00:00Z"}})
+	case strings.HasSuffix(path, "/estimate"):
+		f.json(w, 200, map[string]any{"exempt": false, "automationMicros": 7000, "totalMicros": 11000, "availableMicros": 5000,
+			"destinations": []map[string]any{{"platform": "FACEBOOK_PAGE", "format": "TEXT", "serviceMicros": 2000, "totalMicros": 2000}}})
 	case path == "/api/analytics" && r.URL.Query().Get("range") == "today":
 		f.json(w, 200, map[string]any{"days": 1, "range": "today", "timezone": "Asia/Dhaka", "posts": 1, "totals": map[string]any{"likes": 5},
 			"gained": map[string]any{"likes": 30, "comments": 5, "views": 900}, "gainedPrevious": map[string]any{"likes": 20, "views": 1000},

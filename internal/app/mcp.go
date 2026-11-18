@@ -213,6 +213,16 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 				}
 				return cmd((*Env).calendar, args...)(ctx)
 			}},
+		{Name: "get_balance", Title: "Credit balance", Description: "The account's prepaid credit: balance, what's available, spending, and the last days' charges (paying is on the website).",
+			InputSchema: obj(map[string]any{"days": num("history days, default 7, at most 30")}), Annotations: ro,
+			run: func(ctx context.Context, a map[string]any) (any, error) {
+				b, err := c.Billing(ctx)
+				if err != nil || b == nil || b.Exempt {
+					return b, err
+				}
+				lines, err := c.Ledger(ctx, iArg(a, "days", 7))
+				return map[string]any{"billing": b, "ledger": lines}, err
+			}},
 		{Name: "stats", Title: "Results", Description: "Results (reach, likes, comments…): of one post per account when post is given, else the last N days per platform and the top posts.",
 			InputSchema: obj(map[string]any{"post": str("a post (optional)"), "project": str("project (optional)"), "days": num("default 30"),
 				"range": str("today, yesterday, 7d, 30d, 90d or 365d (instead of days)")}), Annotations: ro,
