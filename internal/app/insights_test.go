@@ -49,6 +49,12 @@ func TestStatsAndInbox(t *testing.T) {
 	if code, out := runCLI(t, dir, "stats"); code != 0 || !strings.Contains(out, "120 likes") || !strings.Contains(out, "3,400 reach") || !strings.Contains(out, "Top posts") {
 		t.Errorf("stats: %s", out)
 	}
+	// Today: growth vs yesterday at this time (30+2×5 = 40 vs 20 → ▲ 100%), views ▼ 10%, clicks new, activity.
+	if code, out := runCLI(t, dir, "stats", "--today"); code != 0 || !strings.Contains(out, "Today") || !strings.Contains(out, "40 ▲ 100%") ||
+		!strings.Contains(out, "900 ▼ 10%") || !strings.Contains(out, "12 ▲ new") || !strings.Contains(out, "1 failed") ||
+		!strings.Contains(out, "3 still to go today") || !strings.Contains(out, "tracked from 2026-11-18") {
+		t.Errorf("stats --today: %s", out)
+	}
 	if code, out := runCLI(t, dir, "stats", "last"); code != 0 || !strings.Contains(out, "12 likes · 3 comments") || !strings.Contains(out, "don't share numbers") {
 		t.Errorf("post stats: %s", out)
 	}

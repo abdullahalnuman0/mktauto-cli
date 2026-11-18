@@ -353,7 +353,19 @@ func (c *Client) StopRepeat(ctx context.Context, postID string) (*Post, error) {
 }
 
 func (c *Client) Analytics(ctx context.Context, days int, projectID string) (*Analytics, error) {
-	q := url.Values{"days": {fmt.Sprint(days)}}
+	return c.AnalyticsRange(ctx, fmt.Sprintf("%dd", days), "", projectID)
+}
+
+// AnalyticsRange: range = today, yesterday or Nd; tz = the viewer's IANA timezone ("" = the project's). An older
+// server ignores range and tz (and answers for 30 days).
+func (c *Client) AnalyticsRange(ctx context.Context, rng, tz, projectID string) (*Analytics, error) {
+	q := url.Values{"range": {rng}}
+	if d, ok := strings.CutSuffix(rng, "d"); ok {
+		q.Set("days", d) // older servers
+	}
+	if tz != "" {
+		q.Set("tz", tz)
+	}
 	if projectID != "" {
 		q.Set("projectId", projectID)
 	}

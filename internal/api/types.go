@@ -357,11 +357,48 @@ type Repeat struct {
 }
 
 type Analytics struct {
-	Days       int                         `json:"days"`
-	ByPlatform map[string]map[string]int64 `json:"byPlatform"`
-	Totals     map[string]int64            `json:"totals"`
-	Top        []TopPost                   `json:"top"`
-	Posts      int                         `json:"posts"`
+	Days           int                         `json:"days"`
+	ByPlatform     map[string]map[string]int64 `json:"byPlatform"`
+	Totals         map[string]int64            `json:"totals"`
+	Top            []TopPost                   `json:"top"`
+	Posts          int                         `json:"posts"`
+	Range          string                      `json:"range"` // ADR-083 (empty from an older server)
+	Timezone       string                      `json:"timezone"`
+	Previous       map[string]int64            `json:"previous"`
+	Gained         map[string]int64            `json:"gained"`
+	GainedPrevious map[string]int64            `json:"gainedPrevious"`
+	HistoryFrom    string                      `json:"historyFrom"`
+	ByAccount      []AccountTotals             `json:"byAccount"`
+	Daily          []AnalyticsDay              `json:"daily"`
+	Activity       *Activity                   `json:"activity"`
+	Clicks         *Clicks                     `json:"clicks"`
+}
+
+type AccountTotals struct {
+	AccountID   string           `json:"accountId"`
+	AccountName string           `json:"accountName"`
+	Platform    string           `json:"platform"`
+	Posts       int              `json:"posts"`
+	Totals      map[string]int64 `json:"totals"`
+}
+
+type AnalyticsDay struct {
+	Day    string           `json:"day"`
+	Posts  int              `json:"posts"`
+	Gained map[string]int64 `json:"gained"`
+}
+
+type Activity struct {
+	Published int `json:"published"`
+	Failed    int `json:"failed"`
+	Scheduled int `json:"scheduled"`
+	Manual    int `json:"manual"`
+}
+
+type Clicks struct {
+	Total    int64            `json:"total"`
+	Previous int64            `json:"previous"`
+	BySource map[string]int64 `json:"bySource"`
 }
 
 type TopPost struct {

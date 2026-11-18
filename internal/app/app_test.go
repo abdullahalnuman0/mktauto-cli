@@ -173,6 +173,11 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{"localDateTime": day + "T09:00:00", "scheduledAt": day + "T03:00:00Z", "timezone": "Asia/Dhaka"})
 		}
 		f.json(w, 200, out)
+	case path == "/api/analytics" && r.URL.Query().Get("range") == "today":
+		f.json(w, 200, map[string]any{"days": 1, "range": "today", "timezone": r.URL.Query().Get("tz"), "posts": 1, "totals": map[string]any{"likes": 5},
+			"gained": map[string]any{"likes": 30, "comments": 5, "views": 900}, "gainedPrevious": map[string]any{"likes": 20, "views": 1000},
+			"historyFrom": "2026-11-18", "clicks": map[string]any{"total": 12, "previous": 0},
+			"activity": map[string]any{"published": 2, "failed": 1, "scheduled": 3, "manual": 0}})
 	case path == "/api/analytics":
 		f.json(w, 200, map[string]any{"days": 30, "posts": 4, "totals": map[string]any{"likes": 120, "reach": 3400},
 			"byPlatform": map[string]any{"INSTAGRAM": map[string]any{"likes": 100}}, "top": []map[string]any{{"postId": postID(1), "title": "Launch", "totals": map[string]any{"likes": 90}}}})

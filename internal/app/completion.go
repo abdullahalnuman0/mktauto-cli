@@ -42,7 +42,7 @@ var commandFlags = map[string][]string{
 	"draft":       {"from-git", "repo", "since", "app", "language", "max", "print"},
 	"posts":       {"days", "status", "json"},
 	"calendar":    {"days", "project", "json"},
-	"stats":       {"days", "project", "refresh", "links", "json"},
+	"stats":       {"days", "range", "today", "project", "refresh", "links", "json"},
 	"inbox":       {"all", "read-all", "json"},
 	"edit":        {"caption", "caption-file", "hashtags", "link", "name"},
 	"schedule":    {"at", "next-slot"},
@@ -180,6 +180,8 @@ func (e *Env) completeValue(ctx context.Context, cmd, flagName, cur string) ([]c
 		return filterPrefix([]candidate{{"yours", "your own brand"}, {"partner", "branded content"}, {"yours,partner", ""}}, cur), true
 	case "tiktok-allow":
 		return filterPrefix([]candidate{{"comments", ""}, {"duet", ""}, {"stitch", ""}, {"comments,duet,stitch", ""}}, cur), true
+	case "range":
+		return filterPrefix([]candidate{{"today", ""}, {"yesterday", ""}, {"7d", ""}, {"30d", ""}, {"90d", ""}, {"365d", ""}}, cur), true
 	case "allow":
 		return filterPrefix([]candidate{{"read", ""}, {"drafts", "default"}, {"schedule", ""}, {"publish", ""}}, cur), true
 	case "status":

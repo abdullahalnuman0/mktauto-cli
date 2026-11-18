@@ -214,7 +214,8 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 				return cmd((*Env).calendar, args...)(ctx)
 			}},
 		{Name: "stats", Title: "Results", Description: "Results (reach, likes, comments…): of one post per account when post is given, else the last N days per platform and the top posts.",
-			InputSchema: obj(map[string]any{"post": str("a post (optional)"), "project": str("project (optional)"), "days": num("default 30")}), Annotations: ro,
+			InputSchema: obj(map[string]any{"post": str("a post (optional)"), "project": str("project (optional)"), "days": num("default 30"),
+				"range": str("today, yesterday, 7d, 30d, 90d or 365d (instead of days)")}), Annotations: ro,
 			run: func(ctx context.Context, a map[string]any) (any, error) {
 				if sArg(a, "post") != "" {
 					id, err := postID(ctx, a)
@@ -232,7 +233,7 @@ func (e *Env) mcpTools(c *api.Client) []mcpTool {
 					}
 					pid = p.ID
 				}
-				return c.Analytics(ctx, iArg(a, "days", 30), pid)
+				return c.AnalyticsRange(ctx, firstNonEmpty(sArg(a, "range"), fmt.Sprintf("%dd", iArg(a, "days", 30))), localZone(), pid)
 			}},
 		{Name: "ai_caption", Title: "AI caption help", Description: "The server's caption helper: improve, shorten, professional, casual, hashtags or translate. Uses the user's daily AI limit.",
 			InputSchema: obj(map[string]any{"action": str("improve, shorten, professional, casual, hashtags or translate"), "text": str("the caption"),

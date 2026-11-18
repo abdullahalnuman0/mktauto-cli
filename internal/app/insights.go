@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -192,6 +193,8 @@ func metricsLine(m map[string]int64) string {
 func (e *Env) stats(ctx context.Context, args []string) error {
 	fs := e.flags("stats", "stats [POST] [--days N] [--project NAME] [--refresh] [--links] [--json]")
 	days := fs.Int("days", 30, "the last N days")
+	rng := fs.String("range", "", "today, yesterday, 7d, 30d, 90d or 365d (instead of --days)")
+	today := fs.Bool("today", false, "today so far (same as --range today)")
 	project := fs.String("project", "", "only this project")
 	refresh := fs.Bool("refresh", false, "with a post: ask the platforms for the latest numbers now")
 	links := fs.Bool("links", false, "clicks on tracked links")
@@ -273,7 +276,11 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 		}
 		pid = p.ID
 	}
-	a, err := c.Analytics(ctx, *days, pid)
+	window := firstNonEmpty(*rng, fmt.Sprintf("%dd", *days))
+	if *today {
+		window = "today"
+	}
+	a, err := c.AnalyticsRange(ctx, window, localZone(), pid)
 	if api.IsProblem(err, 403, "cli_project") {
 		return withCode(exitNotAllowed, errors.New("this terminal may only see some projects: add --project NAME"))
 	}
@@ -283,7 +290,39 @@ func (e *Env) stats(ctx context.Context, args []string) error {
 	if *asJSON {
 		return e.printJSON(a)
 	}
-	e.printf("%s %s\n", bold.Render(fmt.Sprintf("Last %d days · %s:", a.Days, plural(a.Posts, "post"))), metricsLine(a.Totals))
+	label := map[string]string{"today": "Today", "yesterday": "Yesterday"}[a.Range]
+	if label == "" {
+		label = fmt.Sprintf("Last %d days", a.Days)
+	}
+	prevLabel := map[string]string{"today": "yesterday at this time", "yesterday": "the day before"}[a.Range]
+	if prevLabel == "" {
+		prevLabel = "the previous " + plural(a.Days, "day")
+	}
+	e.printf("%s\n", bold.Render(label)+faint.Render(" · compared with "+prevLabel))
+	if a.Gained != nil {
+		e.printf("  %-18s %s\n", "Engagement gained", withDelta(engagement(a.Gained), engagement(a.GainedPrevious)))
+		e.printf("  %-18s %s\n", "Views gained", withDelta(a.Gained["views"], a.GainedPrevious["views"]))
+	}
+	if a.Clicks != nil {
+		e.printf("  %-18s %s\n", "Link clicks", withDelta(a.Clicks.Total, a.Clicks.Previous))
+	}
+	if a.Activity != nil {
+		line := fmt.Sprintf("%d published", a.Activity.Published)
+		if a.Activity.Failed > 0 {
+			line += " · " + red.Render(fmt.Sprintf("%d failed", a.Activity.Failed))
+		}
+		if a.Activity.Scheduled > 0 {
+			line += fmt.Sprintf(" · %d still to go today", a.Activity.Scheduled)
+		}
+		if a.Activity.Manual > 0 {
+			line += " · " + yellow.Render(fmt.Sprintf("%d to post yourself", a.Activity.Manual))
+		}
+		e.printf("  %-18s %s\n", "Posts", line)
+	}
+	if a.HistoryFrom != "" && a.Range != "" {
+		e.printf("  %s\n", faint.Render("growth is tracked from "+a.HistoryFrom))
+	}
+	e.printf("%s %s\n", bold.Render(fmt.Sprintf("Posts published in this period (%d):", a.Posts)), metricsLine(a.Totals))
 	var plats []string
 	for p := range a.ByPlatform {
 		plats = append(plats, p)
@@ -456,4 +495,35 @@ func (e *Env) stopRepeat(ctx context.Context, args []string) error {
 	}
 	e.printf("%s %s won't repeat any more\n", green.Render("✓"), bold.Render(p.Title()))
 	return nil
+}
+
+// withDelta: "1,234 ▲ 12%" against the previous period (no % when there was nothing before).
+func withDelta(now, before int64) string {
+	s := humanize.Comma(now)
+	switch {
+	case before == 0 && now == 0:
+	case before == 0:
+		s += green.Render(" ▲ new")
+	case now >= before:
+		s += green.Render(fmt.Sprintf(" ▲ %d%%", (now-before)*100/before))
+	default:
+		s += red.Render(fmt.Sprintf(" ▼ %d%%", (before-now)*100/before))
+	}
+	return s
+}
+
+// localZone: this computer's IANA timezone ("" when unknown: the server uses the project's).
+func localZone() string {
+	if tz := os.Getenv("TZ"); tz != "" {
+		return tz
+	}
+	if name := time.Now().Location().String(); name != "Local" && name != "" {
+		return name
+	}
+	if target, err := os.Readlink("/etc/localtime"); err == nil {
+		if _, zone, ok := strings.Cut(target, "zoneinfo/"); ok {
+			return zone
+		}
+	}
+	return ""
 }
