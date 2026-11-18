@@ -169,7 +169,7 @@ func metricsLine(m map[string]int64) string {
 	seen := map[string]bool{}
 	for _, k := range metricOrder {
 		if v, ok := m[k]; ok {
-			parts = append(parts, fmt.Sprintf("%s %s", humanize.Comma(v), k))
+			parts = append(parts, fmt.Sprintf("%s %s", humanize.Comma(v), metricName(k, v)))
 			seen[k] = true
 		}
 	}
@@ -181,7 +181,7 @@ func metricsLine(m map[string]int64) string {
 	}
 	sort.Strings(rest)
 	for _, k := range rest {
-		parts = append(parts, fmt.Sprintf("%s %s", humanize.Comma(m[k]), strings.ReplaceAll(k, "_", " ")))
+		parts = append(parts, fmt.Sprintf("%s %s", humanize.Comma(m[k]), metricName(strings.ReplaceAll(k, "_", " "), m[k])))
 	}
 	if len(parts) == 0 {
 		return faint.Render("no numbers yet")
@@ -554,4 +554,12 @@ func sourcesOf(a *api.Analytics, metrics ...string) string {
 	}
 	sort.Strings(names)
 	return faint.Render(" · " + strings.Join(names, ", "))
+}
+
+// metricName: "view" for exactly 1, "views" otherwise.
+func metricName(k string, n int64) string {
+	if n == 1 {
+		return strings.TrimSuffix(k, "s")
+	}
+	return k
 }

@@ -182,3 +182,15 @@ func TestBestTimesScoring(t *testing.T) {
 		t.Errorf("no posts yet: %d %s", code, out)
 	}
 }
+
+func TestMetricsLineSingular(t *testing.T) {
+	got := metricsLine(map[string]int64{"views": 1, "likes": 2, "comments": 1})
+	for _, want := range []string{"1 view", "2 likes", "1 comment"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "1 views") {
+		t.Errorf("plural for 1: %q", got)
+	}
+}
