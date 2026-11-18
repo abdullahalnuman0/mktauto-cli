@@ -18,6 +18,7 @@ curl -fsSL https://mktauto.site/install.sh | sh
 irm https://mktauto.site/install.ps1 | iex
 ```
 
+Needs Windows 10 or newer, macOS 13 Ventura or newer (Intel or Apple silicon), or Linux (x86-64 or ARM64).
 Both download from [GitHub Releases](https://github.com/abdullahalnuman0/mktauto-cli/releases), check the SHA-256 against
 the release's `checksums.txt` and install for your user. Or download a file from the releases page yourself.
 Update later with `mktauto update` (it also tells you once a day when a new version is out;
