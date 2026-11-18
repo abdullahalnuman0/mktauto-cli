@@ -95,6 +95,8 @@ and one key to act: `s` schedule / move, `u` unschedule, `p` publish now, `e` ed
 ```sh
 mktauto calendar                    # the next 14 days, day by day, with the free posting times
 mktauto stats                       # the last 30 days: reach, likes, comments… per platform, top posts
+mktauto stats --today               # today so far vs yesterday: growth, link clicks, published/failed/still to go
+mktauto stats --range 7d            # also yesterday, 30d, 90d, 365d
 mktauto stats last --refresh        # one post, each account, fresh numbers from the platforms
 mktauto stats --links               # clicks on tracked links, by source
 mktauto inbox                       # failures, posts to finish yourself, approvals (enter: what to do)
