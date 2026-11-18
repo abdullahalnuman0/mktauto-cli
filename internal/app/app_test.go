@@ -41,6 +41,8 @@ type fakeServer struct {
 	scheduleIn []map[string]any
 	aiCalls    []map[string]any
 	readAll    bool
+	builds     []map[string]any // release summaries received (POST /api/agent/builds)
+	buildAuth  []string
 }
 
 func postID(n int) string { return fmt.Sprintf("%08d-0000-4000-8000-000000000000", n) }
@@ -94,7 +96,8 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	session := map[string]any{"id": "s1", "name": "studio-pc", "permission": f.permission, "createdVia": "CODE", "expiresAt": "2027-02-15T00:00:00Z"}
 	public := path == "/api/cli/redeem" || strings.HasPrefix(path, "/api/cli/device-auth") || strings.HasPrefix(path, "/r2/")
 	if !public {
-		if r.Header.Get("Authorization") != "Bearer mkc_session" || f.revoked {
+		apiKey := path == "/api/agent/builds" && r.Header.Get("Authorization") == "Bearer mkt_key" // API keys reach only /api/agent
+		if (r.Header.Get("Authorization") != "Bearer mkc_session" && !apiKey) || f.revoked {
 			f.problem(w, 401, "invalid_cli_session", "Signed out")
 			return
 		}
@@ -173,6 +176,19 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{"localDateTime": day + "T09:00:00", "scheduledAt": day + "T03:00:00Z", "timezone": "Asia/Dhaka"})
 		}
 		f.json(w, 200, out)
+	case path == "/api/agent/builds" && r.Method == "POST":
+		f.builds = append(f.builds, body)
+		f.buildAuth = append(f.buildAuth, r.Header.Get("Authorization"))
+		if body["format"] != "mktauto-release-summary/1" {
+			f.problem(w, 400, "invalid_summary", "This isn't an MKTAuto release summary")
+			return
+		}
+		if body["packageName"] != "com.example.notes" {
+			f.problem(w, 404, "not_found", "App "+fmt.Sprint(body["packageName"]))
+			return
+		}
+		f.json(w, 201, map[string]any{"id": "b1", "versionCode": body["versionCode"], "versionName": body["versionName"], "targetSdk": body["targetSdk"],
+			"permissions": len(body["permissions"].([]any)), "libraries": len(body["libraries"].([]any)), "uploadedAt": "2026-11-18T10:00:00Z", "live": false})
 	case path == "/api/billing":
 		f.json(w, 200, map[string]any{"mode": "PREPAID", "exempt": false, "balanceMicros": 480000, "availableMicros": 460000, "heldMicros": 20000,
 			"creditLimitMicros": 0, "spentTodayMicros": 17000, "spent30dMicros": 120000, "daysLeft": 120, "scheduledEstimateMicros": 34000,

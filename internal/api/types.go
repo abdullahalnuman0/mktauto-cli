@@ -512,3 +512,15 @@ type Estimate struct {
 		TotalMicros        int64  `json:"totalMicros"`
 	} `json:"destinations"`
 }
+
+// BuildUpload: the server's BuildService.BuildSummary after a release summary upload (ADR-090).
+type BuildUpload struct {
+	ID          string  `json:"id"`
+	VersionCode int64   `json:"versionCode"`
+	VersionName *string `json:"versionName"`
+	TargetSdk   *int    `json:"targetSdk"`
+	Permissions int     `json:"permissions"`
+	Libraries   int     `json:"libraries"`
+	UploadedAt  string  `json:"uploadedAt"`
+	Live        bool    `json:"live"`
+}

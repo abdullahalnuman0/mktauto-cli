@@ -426,6 +426,16 @@ func (c *Client) AIAltText(ctx context.Context, assetID, language string) (*AltT
 	return &out, err
 }
 
+// UploadReleaseSummary sends a release summary (ADR-090) to the App Ops app with its package name; the server checks
+// every field again.
+func (c *Client) UploadReleaseSummary(ctx context.Context, summary json.RawMessage) (*BuildUpload, error) {
+	var out BuildUpload
+	if _, err := c.do(ctx, http.MethodPost, "/api/agent/builds", summary, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Billing: the wallet; nil (no error) from a server without billing.
 func (c *Client) Billing(ctx context.Context) (*Billing, error) {
 	var out Billing

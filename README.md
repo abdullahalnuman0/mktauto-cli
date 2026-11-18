@@ -110,6 +110,23 @@ mktauto stop-repeat 3f2a91c0
 The review screen (and `--dry-run`) shows the exact text each account gets, with the hashtags added and its length
 against the platform's limit.
 
+### Android release summary (App Ops)
+
+For apps added under **Apps** on the website: after building a release, run this in the Android project's root folder.
+It writes `mktauto-release-<versionCode>.json` (package name, versions, SDK levels, permissions and library
+versions; no source code or app file) and, with `--upload`, sends it to the app's **Builds** tab, which compares it
+with the previous release and lists what to check in Play's Data safety form.
+
+```sh
+mktauto release-summary                       # runs ./gradlew for the release manifest and libraries, writes the file
+mktauto release-summary --upload              # and uploads it
+mktauto release-summary --module mobile --variant prodRelease --skip-build
+```
+
+The build runs without your MKTAuto sign-in in its environment. In CI, set `MKTAUTO_TOKEN` to an API key with
+"Upload release summaries" (Settings → API keys) and `MKTAUTO_SERVER`. Terminal logins limited to some projects
+can't upload, because apps don't belong to a project.
+
 ### Alt text and threads
 
 The wizard asks for alt text for the images (a short description for people who can't see them; X, Instagram,

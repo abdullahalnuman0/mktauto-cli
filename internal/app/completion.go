@@ -23,7 +23,7 @@ import (
 
 var commandHelp = map[string]string{
 	"post": "post files from this folder", "batch": "one post per file or subfolder", "import": "one post per spreadsheet row",
-	"balance": "your credit and charges", "billing": "top up on the website",
+	"balance": "your credit and charges", "release-summary": "summarise an Android release for App Ops", "billing": "top up on the website",
 	"posts": "full-screen list of posts", "calendar": "what's planned", "stats": "results", "inbox": "failures, approvals",
 	"status": "recent posts or one post", "edit": "change a saved post", "schedule": "schedule or move a post",
 	"unschedule": "back to a draft", "publish": "publish a saved post now", "cancel": "stop what isn't published",
@@ -35,35 +35,36 @@ var commandHelp = map[string]string{
 
 // commandFlags: each command's flags (post, batch and import add mktauto post's; a test keeps them in step).
 var commandFlags = map[string][]string{
-	"batch":       {"each", "every", "include-posted", "limit"},
-	"import":      {"example"},
-	"watch":       {"each", "interval", "existing"},
-	"best-times":  {"project", "platform", "days", "json"},
-	"mcp":         {"allow"},
-	"draft":       {"from-git", "repo", "since", "app", "language", "max", "print"},
-	"posts":       {"days", "status", "json"},
-	"calendar":    {"days", "project", "json"},
-	"stats":       {"days", "range", "today", "project", "refresh", "links", "json"},
-	"balance":     {"days", "json"},
-	"inbox":       {"all", "read-all", "json"},
-	"edit":        {"caption", "caption-file", "hashtags", "link", "name"},
-	"schedule":    {"at", "next-slot"},
-	"publish":     {"yes", "wait"},
-	"cancel":      {"yes"},
-	"delete":      {"yes"},
-	"duplicate":   {"at", "next-slot"},
-	"history":     {"all"},
-	"projects":    {"json"},
-	"accounts":    {"project", "json"},
-	"boards":      {"json"},
-	"ai":          {"file", "platform", "max", "language", "json"},
-	"login":       {"code", "no-browser"},
-	"update":      {"version", "check"},
-	"status":      {},
-	"unschedule":  {},
-	"stop-repeat": {},
-	"retry":       {},
-	"open":        {},
+	"batch":           {"each", "every", "include-posted", "limit"},
+	"import":          {"example"},
+	"watch":           {"each", "interval", "existing"},
+	"best-times":      {"project", "platform", "days", "json"},
+	"mcp":             {"allow"},
+	"draft":           {"from-git", "repo", "since", "app", "language", "max", "print"},
+	"posts":           {"days", "status", "json"},
+	"calendar":        {"days", "project", "json"},
+	"stats":           {"days", "range", "today", "project", "refresh", "links", "json"},
+	"balance":         {"days", "json"},
+	"release-summary": {"dir", "module", "variant", "package", "skip-build", "output", "o", "upload", "json"},
+	"inbox":           {"all", "read-all", "json"},
+	"edit":            {"caption", "caption-file", "hashtags", "link", "name"},
+	"schedule":        {"at", "next-slot"},
+	"publish":         {"yes", "wait"},
+	"cancel":          {"yes"},
+	"delete":          {"yes"},
+	"duplicate":       {"at", "next-slot"},
+	"history":         {"all"},
+	"projects":        {"json"},
+	"accounts":        {"project", "json"},
+	"boards":          {"json"},
+	"ai":              {"file", "platform", "max", "language", "json"},
+	"login":           {"code", "no-browser"},
+	"update":          {"version", "check"},
+	"status":          {},
+	"unschedule":      {},
+	"stop-repeat":     {},
+	"retry":           {},
+	"open":            {},
 }
 
 // postArgCommands take a POST as their first argument.
@@ -163,6 +164,10 @@ func (e *Env) completeValue(ctx context.Context, cmd, flagName, cur string) ([]c
 		}), true
 	case "caption-file", "file":
 		return filesLike(cur, func(string) bool { return true }), true
+	case "dir": // release-summary: folders only
+		return filesLike(cur, func(string) bool { return false }), true
+	case "output":
+		return filesLike(cur, func(n string) bool { return strings.HasSuffix(strings.ToLower(n), ".json") }), true
 	case "when":
 		if cmd == "batch" || cmd == "import" {
 			return filterPrefix([]candidate{{"next-slot", "the next free posting times"}, {"draft", ""}}, cur), true

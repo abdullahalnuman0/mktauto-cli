@@ -85,6 +85,9 @@ Saved posts (POST = an id, its first characters as status shows them, or "last")
 Write:
   mktauto ai ACTION TEXT     AI caption help: improve, shorten, professional, casual, hashtags, translate
 
+Android apps (App Ops):
+  mktauto release-summary    summarise a release build (permissions, SDKs, versions) for the app's Builds tab (--upload)
+
 This computer:
   mktauto login              sign in (browser approval or QR code; --code for a login code)
   mktauto logout             sign out this computer
@@ -237,6 +240,8 @@ func (e *Env) dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.stats(ctx, args)
 	case "balance", "credit", "wallet":
 		return e.balance(ctx, args)
+	case "release-summary":
+		return e.releaseSummary(ctx, args)
 	case "billing":
 		return e.billing(ctx, args)
 	case "inbox":
