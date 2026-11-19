@@ -549,3 +549,25 @@ func TestUpdateNoticeAndCheck(t *testing.T) {
 		t.Errorf("cached notice: %d %s", code, out)
 	}
 }
+
+func TestPlainHTTPServerIsRefused(t *testing.T) {
+	f, dir := setup(t)
+	before := len(f.posts)
+	t.Setenv("MKTAUTO_SERVER", "http://api.example.com")
+	for _, args := range [][]string{{"whoami"}, {"login", "--code", "ABCD-1234"}, {"--server", "http://10.0.0.5:8080", "status"}} {
+		code, out := runCLI(t, dir, args...)
+		if code != exitUsage || !strings.Contains(out, "plain http://") || !strings.Contains(out, "use https://") {
+			t.Errorf("%v: want exit %d and advice to use https://, got %d %s", args, exitUsage, code, out)
+		}
+	}
+	if code, out := runCLI(t, dir, "version"); code != 0 {
+		t.Errorf("commands that don't use the server still work: %d %s", code, out)
+	}
+	// http:// to this computer is fine (the fake server listens on 127.0.0.1).
+	if code, out := runCLI(t, dir, "--server", f.srv.URL, "whoami"); code == exitUsage || strings.Contains(out, "plain http://") {
+		t.Errorf("loopback http is allowed: %d %s", code, out)
+	}
+	if len(f.posts) != before {
+		t.Error("nothing was sent")
+	}
+}

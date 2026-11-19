@@ -140,6 +140,11 @@ loop:
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
 	}
+	// Never sign in or send the session token over plain http:// (only to this computer, for development).
+	if err := api.CheckServer(env.Server); err != nil && !offlineCommand(cmd) {
+		fmt.Fprintln(env.Err, red.Render("✗ ")+err.Error()+".\nSet the server with --server https://… or MKTAUTO_SERVER.")
+		return exitUsage
+	}
 	if exe, err := os.Executable(); err == nil {
 		update.Cleanup(exe) // the program a Windows update left behind
 	}
@@ -170,6 +175,16 @@ loop:
 		fmt.Fprintln(env.Err, red.Render("✗ ")+err.Error())
 	}
 	return code
+}
+
+// offlineCommand: commands that never talk to the MKTAuto server (so a bad server address doesn't stop them, e.g.
+// `mktauto update` still works).
+func offlineCommand(cmd string) bool {
+	switch cmd {
+	case "", "help", "-h", "--help", "version", "--version", "-v", "update", "completion", "__complete":
+		return true
+	}
+	return false
 }
 
 func newEnv(version string) (*Env, error) {

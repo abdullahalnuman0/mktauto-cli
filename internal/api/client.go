@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,7 +60,40 @@ func NormalizeServer(s string) string {
 	return strings.TrimRight(s, "/")
 }
 
+// CheckServer refuses a server address that would send the sign-in and the session token in clear text: it must be
+// https://, except plain http:// to this computer (localhost, 127.0.0.0/8, ::1) for development and tests.
+func CheckServer(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("%q isn't a server address: use one like https://api.mktauto.site", s)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if IsLoopback(u.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("%s uses plain http://, which would send your sign-in and session token unencrypted: use https://%s instead (http:// is only allowed for localhost)", s, u.Host)
+	}
+	return fmt.Errorf("%q isn't a server address: use https://", s)
+}
+
+// IsLoopback: host is this computer (localhost, 127.0.0.0/8 or ::1).
+func IsLoopback(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) (int, error) {
+	// Checked again here so that no caller can send a token to an insecure address by mistake.
+	if err := CheckServer(c.BaseURL); err != nil {
+		return 0, err
+	}
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
