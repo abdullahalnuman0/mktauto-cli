@@ -22,7 +22,9 @@ Needs Windows 10 or newer, macOS 13 Ventura or newer (Intel or Apple silicon), o
 Both download from [GitHub Releases](https://github.com/abdullahalnuman0/mktauto-cli/releases), check the SHA-256 against
 the release's `checksums.txt` and install for your user. Or download a file from the releases page yourself.
 Update later with `mktauto update` (it also tells you once a day when a new version is out;
-`MKTAUTO_NO_UPDATE_CHECK=1` turns that off).
+`MKTAUTO_NO_UPDATE_CHECK=1` turns that off). `mktauto update` installs only releases whose `checksums.txt` carries a
+valid Ed25519 signature (`checksums.txt.sig`) from the key built into the program; releases up to v0.11.0 were not
+signed and can't be installed that way.
 
 The programs are not code-signed yet: Windows SmartScreen or macOS Gatekeeper may warn about a file downloaded in a
 browser (Windows: More info → Run anyway; macOS: System Settings → Privacy & Security → Open Anyway). Check the
@@ -235,7 +237,7 @@ when: next-slot   # draft, now, next-slot or "2026-12-01 18:30"
 - The session token is kept in the system keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service),
   or in a file only your user can read when there is no keychain (`mktauto doctor` says which).
 - Files go straight to storage over HTTPS; social media passwords and platform tokens never reach your computer.
-- Environment: `MKTAUTO_SERVER` (another MKTAuto server), `MKTAUTO_TOKEN` (a session token for CI),
+- Environment: `MKTAUTO_SERVER` (another MKTAuto server; https:// only, http:// just for localhost), `MKTAUTO_TOKEN` (a session token for CI),
   `MKTAUTO_CONFIG_DIR`, `MKTAUTO_TOKEN_STORE=file`, `MKTAUTO_NO_BROWSER=1`.
 
 ## Develop
@@ -251,5 +253,6 @@ go build -ldflags "-X main.version=dev" -o mktauto ./cmd/mktauto
 git tag v1.2.0 && git push origin v1.2.0
 ```
 
-GitHub Actions runs the tests, builds Windows, macOS and Linux (x64 and ARM64), writes `checksums.txt` and publishes
-the release (a tag with a `-`, e.g. `v1.3.0-beta.1`, becomes a pre-release). Earlier releases stay.
+GitHub Actions runs the tests, builds Windows, macOS and Linux (x64 and ARM64), writes `checksums.txt`, signs it into
+`checksums.txt.sig` with the repository secret `MKTAUTO_SIGNING_KEY` (`internal/tools/sign`; the job fails without it
+or when it doesn't match `releasePublicKey` in `internal/update`) and publishes the release (a tag with a `-`, e.g. `v1.3.0-beta.1`, becomes a pre-release). Earlier releases stay.

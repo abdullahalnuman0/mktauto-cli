@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +27,56 @@ import (
 
 // Repo publishes the releases (ADR-069).
 const Repo = "abdullahalnuman0/mktauto-cli"
+
+// releasePublicKey verifies release signatures: base64 of the 32-byte Ed25519 public key whose private key (the
+// repository secret MKTAUTO_SIGNING_KEY) signs every release's checksums.txt into checksums.txt.sig.
+// The private key is kept offline by the owner (and as the repository secret); it never appears in this repository.
+const releasePublicKey = "M71Tyk542vVCYyEKt7tFpFzgDmpj/4kSxZlhQYJ7lfw="
+
+// placeholderKey is the value releasePublicKey has until the real key is filled in.
+const placeholderKey = "REPLACE_WITH_PUBLIC_KEY"
+
+// publicKey is what Fetch verifies with; tests replace it with a key they generate.
+var publicKey = releasePublicKey
+
+// lastUnsigned is the newest release published before releases were signed: it and older ones have no
+// checksums.txt.sig, so they can't be installed by `mktauto update`.
+const lastUnsigned = "v0.11.0"
+
+// ErrNoSigningKey: this build was made without the release public key, so nothing it downloads can be trusted.
+var ErrNoSigningKey = errors.New("this build has no release signing key, so it can't check a download: install the new version with the commands at https://mktauto.site/download")
+
+// EmbeddedPublicKey is the release public key built into this program ("" when it is still the placeholder). The
+// release workflow checks it matches the signing key.
+func EmbeddedPublicKey() string {
+	if releasePublicKey == placeholderKey {
+		return ""
+	}
+	return releasePublicKey
+}
+
+func verifyKey() (ed25519.PublicKey, error) {
+	if publicKey == "" || publicKey == placeholderKey {
+		return nil, ErrNoSigningKey
+	}
+	k, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil || len(k) != ed25519.PublicKeySize {
+		return nil, ErrNoSigningKey
+	}
+	return ed25519.PublicKey(k), nil
+}
+
+// VerifySignature checks sig (base64 of a 64-byte Ed25519 signature, surrounding spaces ignored) over data.
+func VerifySignature(pub ed25519.PublicKey, data, sig []byte) bool {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
+	if err != nil || len(raw) != ed25519.SignatureSize {
+		return false
+	}
+	return ed25519.Verify(pub, data, raw)
+}
+
+// Signed: tag was published after releases started being signed (later than v0.11.0).
+func Signed(tag string) bool { return Newer(tag, lastUnsigned) }
 
 // Source is where releases are read from (tests point it at a fake server).
 type Source struct {
@@ -125,13 +177,29 @@ func parse(v string) ([3]int, string) {
 	return out, pre
 }
 
-// Fetch downloads this system's release file for tag, checks it against the release's checksums.txt and returns the
-// program inside it.
+// Fetch downloads this system's release file for tag and returns the program inside it. It first checks the
+// release's checksums.txt against its Ed25519 signature (checksums.txt.sig) with the public key built into this
+// program, and only then the download against its SHA-256 in checksums.txt.
 func (s *Source) Fetch(ctx context.Context, tag, goos, goarch string) ([]byte, error) {
+	pub, err := verifyKey()
+	if err != nil {
+		return nil, err
+	}
+	if !Signed(tag) {
+		return nil, fmt.Errorf("mktauto %s was released before releases were signed, so it can't be checked and isn't installed: choose a version later than %s (older ones only by hand from https://github.com/%s/releases)",
+			tag, lastUnsigned, Repo)
+	}
 	name := AssetName(tag, goos, goarch)
 	sums, err := s.get(ctx, tag, "checksums.txt", 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("checksums: %w", err)
+	}
+	sig, err := s.get(ctx, tag, "checksums.txt.sig", 4<<10)
+	if err != nil {
+		return nil, fmt.Errorf("release %s has no signature (checksums.txt.sig: %v): not installed", tag, err)
+	}
+	if !VerifySignature(pub, sums, sig) {
+		return nil, fmt.Errorf("release %s's signature doesn't match: its files may have been tampered with, so nothing was installed", tag)
 	}
 	want := ""
 	sc := bufio.NewScanner(bytes.NewReader(sums))

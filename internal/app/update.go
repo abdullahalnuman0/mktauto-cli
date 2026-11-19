@@ -60,7 +60,7 @@ func (e *Env) update(ctx context.Context, args []string) error {
 	if err := update.Replace(exe, program); err != nil {
 		return err
 	}
-	e.printf("%s Updated to %s (checksum verified): %s\n", green.Render("✓"), target, exe)
+	e.printf("%s Updated to %s (signature and checksum verified): %s\n", green.Render("✓"), target, exe)
 	return nil
 }
 

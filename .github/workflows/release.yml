@@ -1,5 +1,6 @@
-# Push a version tag (git tag v1.2.0 && git push origin v1.2.0) → tests, six builds, checksums, a GitHub Release.
-# Uses only GitHub's built-in token; no other secrets. Earlier releases stay.
+# Push a version tag (git tag v1.2.0 && git push origin v1.2.0) → tests, six builds, checksums, a signature, a GitHub
+# Release with 8 files. Needs the repository secret MKTAUTO_SIGNING_KEY (base64 of the 64-byte Ed25519 private key whose
+# public key is releasePublicKey in internal/update); without it the job fails. Earlier releases stay.
 name: Release
 on:
   push:
@@ -19,6 +20,11 @@ jobs:
       - name: Check the tag
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "Tags look like v1.2.3 or v1.2.3-beta.1"; exit 1; }
+      - name: Check the signing key is set
+        env:
+          MKTAUTO_SIGNING_KEY: ${{ secrets.MKTAUTO_SIGNING_KEY }}
+        run: |
+          [ -n "$MKTAUTO_SIGNING_KEY" ] || { echo "::error::The repository secret MKTAUTO_SIGNING_KEY is missing: releases must be signed"; exit 1; }
       - run: go vet ./...
       - run: go test ./...
         env:
@@ -44,6 +50,15 @@ jobs:
             fi
           done
           (cd dist && sha256sum mktauto_* > checksums.txt && cat checksums.txt)
+      - name: Sign checksums.txt
+        env:
+          MKTAUTO_SIGNING_KEY: ${{ secrets.MKTAUTO_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # Refuses (and fails the job) when the secret is missing or doesn't match the key built into the program.
+          go run ./internal/tools/sign dist/checksums.txt
+          n=$(ls dist | wc -l)
+          [ "$n" -eq 8 ] || { echo "::error::Expected 8 release files (6 builds, checksums.txt, checksums.txt.sig), found $n"; ls dist; exit 1; }
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
